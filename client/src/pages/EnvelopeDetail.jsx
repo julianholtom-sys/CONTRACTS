@@ -41,16 +41,25 @@ export default function EnvelopeDetail() {
   const [chain, setChain] = useState(null);
   const [nameDraft, setNameDraft] = useState({});
   const [checks, setChecks] = useState({});
-  const [allDates, setAllDates] = useState({ receivedOn: "", checkedOn: "" });
+  const [companyDates, setCompanyDates] = useState({});
 
   async function reload() {
     const data = await api.getEnvelope(id);
     setEnvelope(data);
     const next = {};
+    const byCompany = {};
     for (const doc of data.due_diligence?.documents || []) {
-      next[doc.key] = { receivedOn: doc.receivedOn || "", checkedOn: doc.checkedOn || "" };
+      const value = { receivedOn: doc.receivedOn || "", checkedOn: doc.checkedOn || "" };
+      next[doc.key] = value;
+      const shared = byCompany[doc.roleKey];
+      if (!shared) byCompany[doc.roleKey] = { ...value };
+      else {
+        if (shared.receivedOn !== value.receivedOn) shared.receivedOn = "";
+        if (shared.checkedOn !== value.checkedOn) shared.checkedOn = "";
+      }
     }
     setChecks(next);
+    setCompanyDates(byCompany);
     setChain(await api.verifyEvents(id));
   }
 
@@ -78,6 +87,10 @@ export default function EnvelopeDetail() {
   const issueBlocked = Boolean(diligence?.applies && !diligence.validatedAt);
   const undatedCount = (diligence?.missing || []).filter((item) => item.includes("received and checked dates")).length;
   const otherMissing = (diligence?.missing || []).filter((item) => !item.includes("received and checked dates"));
+  const datedCompanies = (diligence?.records || []).filter((record) =>
+    (diligence.documents || []).some((doc) => doc.roleKey === record.roleKey)
+  );
+  const companyDated = (roleKey) => Boolean(companyDates[roleKey]?.receivedOn && companyDates[roleKey]?.checkedOn);
 
   function saveChecks(values) {
     return api.saveDueDiligenceChecks(
@@ -219,38 +232,48 @@ export default function EnvelopeDetail() {
           ))}
           {diligence.documents?.length && !diligence.validatedAt ? (
             <div className="party-card" style={{ marginTop: "1rem" }}>
-              <h3>Same dates for every document</h3>
-              <div className="signer-row">
-                <label>
-                  Received
-                  <input
-                    type="date"
-                    value={allDates.receivedOn}
-                    onChange={(e) => setAllDates((current) => ({ ...current, receivedOn: e.target.value }))}
-                  />
-                </label>
-                <label>
-                  Checked
-                  <input
-                    type="date"
-                    value={allDates.checkedOn}
-                    onChange={(e) => setAllDates((current) => ({ ...current, checkedOn: e.target.value }))}
-                  />
-                </label>
-              </div>
+              <h3>Dates by company</h3>
+              {datedCompanies.map((record) => {
+                const value = companyDates[record.roleKey] || { receivedOn: "", checkedOn: "" };
+                const update = (field) => (e) =>
+                  setCompanyDates((current) => ({ ...current, [record.roleKey]: { ...value, [field]: e.target.value } }));
+                return (
+                  <div key={record.roleKey}>
+                    <strong>
+                      {record.label}
+                      {record.companyName ? ` · ${record.companyName}` : ""}
+                    </strong>
+                    <div className="signer-row">
+                      <label>
+                        Received
+                        <input type="date" value={value.receivedOn} onChange={update("receivedOn")} />
+                      </label>
+                      <label>
+                        Checked
+                        <input type="date" value={value.checkedOn} onChange={update("checkedOn")} />
+                      </label>
+                    </div>
+                  </div>
+                );
+              })}
               <button
                 type="button"
                 className="btn secondary"
-                disabled={Boolean(busy) || !allDates.receivedOn || !allDates.checkedOn}
+                disabled={Boolean(busy) || !datedCompanies.some((record) => companyDated(record.roleKey))}
                 onClick={() =>
-                  run("all-dates", () =>
+                  run("company-dates", () =>
                     saveChecks(
-                      Object.fromEntries((diligence.documents || []).map((doc) => [doc.key, { ...allDates }]))
+                      Object.fromEntries(
+                        (diligence.documents || []).map((doc) => [
+                          doc.key,
+                          companyDated(doc.roleKey) ? { ...companyDates[doc.roleKey] } : checks[doc.key],
+                        ])
+                      )
                     )
                   )
                 }
               >
-                {busy === "all-dates" ? "Saving…" : "Apply to every document and save"}
+                {busy === "company-dates" ? "Saving…" : "Apply to each company’s documents and save"}
               </button>
               <p className="muted">Edit any document below that differs.</p>
             </div>
