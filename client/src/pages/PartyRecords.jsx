@@ -230,9 +230,16 @@ function PartyEditor({ kind, copy, id }) {
               <p className="meta">
                 {record.registry.legal_name} · {record.registry.status} · incorporated{" "}
                 {record.registry.incorporated_on} · {record.registry.registered_office}
-                {record.registry.sanctions
-                  ? ` · sanctions ${record.registry.sanctions.hitCount ? `${record.registry.sanctions.hitCount} possible match` : "CLEAN"}`
-                  : ""}
+                {record.registry.sanctions ? (
+                  <>
+                    {" · sanctions "}
+                    {record.registry.sanctions.hitCount ? (
+                      `${record.registry.sanctions.hitCount} possible match`
+                    ) : (
+                      <strong style={{ color: "var(--ok)" }}>CLEAN</strong>
+                    )}
+                  </>
+                ) : null}
               </p>
             ) : (
               <p className="meta">Not fetched yet.</p>

@@ -237,9 +237,12 @@ function writeCompany(writer, letter, record, fact, letters) {
 
   writer.sub(`${letter}1  Company details`);
   const sanctionsAnnex = letters[`sanctions:${record.directoryId}`];
-  const sanctionsText = sanctions
-    ? `${sanctions.hitCount ? `${sanctions.hitCount} possible match${sanctions.hitCount === 1 ? "" : "es"}` : "CLEAN"} · list dated ${sanctions.listedOn || "—"}${sanctionsAnnex ? ` · Annex ${sanctionsAnnex}` : ""}`
-    : "Not run";
+  const sanctionsDetail = ` · list dated ${sanctions?.listedOn || "—"}${sanctionsAnnex ? ` · Annex ${sanctionsAnnex}` : ""}`;
+  const sanctionsCell = !sanctions
+    ? "Not run"
+    : sanctions.hitCount
+      ? { text: `${sanctions.hitCount} possible match${sanctions.hitCount === 1 ? "" : "es"}${sanctionsDetail}`, color: writer.theme.alert }
+      : { runs: [{ text: "CLEAN", bold: true, color: writer.theme.ok }, { text: sanctionsDetail }] };
   writer.table(
     KV,
     [
@@ -256,7 +259,7 @@ function writeCompany(writer, letter, record, fact, letters) {
           ? filingStatus(profile.confirmationStatement, /Last statement dated (\d{1,2} \w+ \d{4})/i, "Dated")
           : "—",
       ],
-      ["UK Sanctions List", sanctions?.hitCount ? { text: sanctionsText, color: writer.theme.alert } : sanctionsText],
+      ["UK Sanctions List", sanctionsCell],
     ],
     { header: false, labelColumn: true }
   );
@@ -296,7 +299,13 @@ function writeCompany(writer, letter, record, fact, letters) {
       { label: "Result", width: 50, align: "center" },
       { label: "Annex", width: 60, align: "center" },
     ],
-    fact.declarations.map(([result, text, annex]) => [text, { check: result === "Yes" }, annex || "—"])
+    fact.declarations.map(([result, text, annex, passWord]) => [
+      passWord && result === "Yes"
+        ? { runs: [{ text: text.slice(0, -passWord.length) }, { text: passWord, bold: true, color: writer.theme.ok }] }
+        : text,
+      { check: result === "Yes" },
+      annex || "—",
+    ])
   );
 }
 
@@ -396,7 +405,7 @@ function companyFacts(record, documents, letters, today) {
     [yes(/^active$/i.test(profile.status || "")), "Active at Companies House", ""],
     [yes(!accountsOverdue), "Accounts up to date", ""],
     [yes(!statementOverdue), "Confirmation statement up to date", ""],
-    [yes(sanctions && !sanctions.hitCount), "UK Sanctions List CLEAN", annex("sanctions")],
+    [yes(sanctions && !sanctions.hitCount), "UK Sanctions List CLEAN", annex("sanctions"), "CLEAN"],
   ];
   if (record.roleKey === "supplier") {
     declarations.push(
@@ -678,7 +687,7 @@ function writeSanctions(writer, sanctions) {
       "Result",
       sanctions.hitCount
         ? { text: `${sanctions.hitCount} possible match${sanctions.hitCount === 1 ? "" : "es"}`, color: writer.theme.alert, bold: true }
-        : { text: "CLEAN", bold: true },
+        : { text: "CLEAN", bold: true, color: writer.theme.ok },
     ],
   ];
   writer.table(KV, rows, { header: false, labelColumn: true });

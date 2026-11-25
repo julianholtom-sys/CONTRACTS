@@ -176,7 +176,8 @@ export class PackWriter {
 
   /**
    * Bordered table. Columns are { label, width, align? } with widths summing to the content width.
-   * A cell is a string, { text, bold, color }, or { check: boolean } for a tick or a cross.
+   * A cell is a string, { text, bold, color }, { runs: [{ text, bold, color }] } for mixed styling
+   * on one line, or { check: boolean } for a tick or a cross.
    */
   table(columns, rows, { header = true, labelColumn = false, size = 8.5 } = {}) {
     const pad = 5;
@@ -188,11 +189,18 @@ export class PackWriter {
     }, MARGIN);
     const faceFor = (cell, index, isHeader) =>
       isHeader || (typeof cell === "object" && cell?.bold) || (labelColumn && index === 0) ? this.bold : this.font;
+    const cellText = (cell) =>
+      cell && typeof cell === "object" ? (cell.runs ? cell.runs.map((run) => run.text).join("") : cell.text) : cell ?? "";
+    const runsFit = (cell, index) =>
+      Boolean(cell?.runs) &&
+      cell.runs.reduce((w, run) => w + this.bold.widthOfTextAtSize(packText(run.text), size), 0) <= columns[index].width - pad * 2;
     const layout = (cells, isHeader) => {
       const lines = cells.map((cell, index) =>
         cell && typeof cell === "object" && "check" in cell
           ? [""]
-          : wrapText(typeof cell === "object" && cell ? cell.text : cell ?? "", faceFor(cell, index, isHeader), size, columns[index].width - pad * 2)
+          : runsFit(cell, index)
+            ? [cellText(cell)]
+            : wrapText(cellText(cell), faceFor(cell, index, isHeader), size, columns[index].width - pad * 2)
       );
       return { lines, height: Math.max(...lines.map((l) => l.length)) * lineH + pad * 2 - 2 };
     };
@@ -215,6 +223,15 @@ export class PackWriter {
         }
         const color = (typeof cell === "object" && cell?.color) || this.theme.ink;
         const face = faceFor(cell, index, isHeader);
+        if (runsFit(cell, index)) {
+          let x = xs[index] + pad;
+          for (const run of cell.runs) {
+            const runFace = run.bold ? this.bold : face;
+            this.draw(run.text, x, top - pad - size + 1, { size, font: runFace, color: run.color || color });
+            x += runFace.widthOfTextAtSize(packText(run.text), size);
+          }
+          return;
+        }
         lines[index].forEach((line, n) => {
           const x =
             columns[index].align === "center"
