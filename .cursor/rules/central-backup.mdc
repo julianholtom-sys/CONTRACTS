@@ -1,20 +1,17 @@
 ---
-description: Use the central Cursor copy as the live project
+description: GitHub main is the live copy of this project
 alwaysApply: true
 ---
 
-# Live central copy
+# Live copy on GitHub
 
-The live version is the branch at https://cursor.com/codebase/julian-holtom. Open that on another machine. Do not keep a newer copy only on this computer.
+The live version is the `main` branch at https://github.com/julianholtom-sys/CONTRACTS (remote `origin`). Open that on another machine. Do not keep a newer copy only on this computer.
 
-Before editing, pull that central branch and continue from it.
+Before editing, pull `origin main` and continue from it.
 
-After each project-file change, commit and push that same branch before the next step. Do not wait until the task is finished.
+After each meaningful project-file change, commit and push `main` to `origin` before moving on. Do not wait until the whole task is finished.
 
 1. Leave out secrets: `.env`, credentials, tokens, and private keys.
-2. Push to the remote whose URL is `origin.cursor.com/julian-holtom/<name>`. That remote is the live one. Track it.
-3. Keep an existing GitHub remote, but do not send new work there unless asked.
-4. If no central repository exists, create a private one under `julian-holtom` and push the working branch.
-5. Do not force-push. Do not change the git user name or email. Use the signed-in Cursor account.
-
-Example: this theme's live branch is `https://origin.cursor.com/julian-holtom/directmx-shopify.git`.
+2. Push to `origin` (`github.com/julianholtom-sys/CONTRACTS`). That remote is the live one. Track it.
+3. The Cursor-hosted copy (`origin.cursor.com/julian-holtom/attest`, remote `cursor`) is retired. It stopped at commit `f5ec4f1` on 19 Oct 2026. Do not push to it or treat it as current unless the user asks.
+4. Do not force-push. Do not change the git user name or email.

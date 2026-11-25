@@ -38,7 +38,7 @@ Use the latest **Claude Opus** for product work on this app, with thinking on. U
 
 ## Branch for local / PC access
 
-**Use `main`.** Company setup, master+appendices, Union Payroll brand, tunnel scripts, and continuity docs are merged there. See `docs/PROJECT_STATUS.md` for detail. Older feature PRs #4/#5/#6 tip are historical.
+**Use `main` on GitHub** (`github.com/julianholtom-sys/CONTRACTS`, remote `origin`). That is the live copy; pull it before editing and push to it after each change. The Cursor-hosted copy (`origin.cursor.com/julian-holtom/attest`) is retired at 19 Oct 2026. Company setup, master+appendices, Union Payroll brand, tunnel scripts, and continuity docs are merged there. See `docs/PROJECT_STATUS.md` for detail. Older feature PRs #4/#5/#6 tip are historical.
 
 ## Continuity rule for agents
 

@@ -139,7 +139,7 @@ Rules of the road:
 - Desktop clone path in this session: `C:\Users\jahwo\Documents\Attest` (empty `Documents\Attext` folder is not the repo). Also cloned at `C:\Users\Shadow\Documents\Attest`.
 - Superseded feature branches (safe to ignore / close after merge): PR **#5**, PR **#4**, and historical `cursor/medialaunch-brand-ui-59a8`.
 - On a work PC: `git checkout main && git pull origin main`.
-- `.cursor/rules/central-backup.mdc` says the live copy is the Cursor-hosted repo `origin.cursor.com/julian-holtom/attest` (remote name `cursor` in the Windows clone). Pushing there needs the origin CLI, which does not run on native Windows, so this Windows PC pushes to GitHub (`origin`) only when the user asks. The Cursor copy has one extra commit (f5ec4f1, the newer rule text), which is now in this repo’s rule file. Push to the Cursor copy from a Mac, Linux, or WSL machine with the origin CLI signed in.
+- **Live copy is GitHub `main`** (`origin` = `github.com/julianholtom-sys/CONTRACTS`), user decision 2026-11-25. `.cursor/rules/central-backup.mdc` says so: pull before editing, commit and push `main` after each meaningful change. The Cursor-hosted repo `origin.cursor.com/julian-holtom/attest` (remote `cursor`) is retired at commit f5ec4f1 (19 Oct 2026); it was never a mirror, and pushing there needs the origin CLI, which does not run on native Windows. Do not push there unless asked.
 
 ## Runtime snapshot (this environment)
 
