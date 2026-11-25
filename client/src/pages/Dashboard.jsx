@@ -58,7 +58,7 @@ export default function Dashboard() {
                 </h3>
                 <div className="meta">
                   {env.entity?.display_name || "Entity"} · {env.party_count} parties ·{" "}
-                  {new Date(env.created_at).toLocaleString()}
+                  {new Date(env.created_at).toLocaleString("en-GB")}
                 </div>
               </div>
               <span className={`badge ${env.status}`}>{env.status}</span>

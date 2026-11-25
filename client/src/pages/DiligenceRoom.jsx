@@ -73,7 +73,7 @@ export default function DiligenceRoom() {
             <h2>Sign the due diligence pack</h2>
             {session.signed ? (
               <p>
-                {`You signed this pack${session.signedAt ? ` on ${new Date(session.signedAt).toLocaleString()}` : ""}. That signature confirms you checked the contents and are satisfied with them.`}
+                {`You signed this pack${session.signedAt ? ` on ${new Date(session.signedAt).toLocaleString("en-GB")}` : ""}. That signature confirms you checked the contents and are satisfied with them, and signs the director’s certificate.`}
               </p>
             ) : (
               <>
@@ -85,7 +85,7 @@ export default function DiligenceRoom() {
                     checked={consent}
                     onChange={(e) => setConsent(e.target.checked)}
                   />
-                  <span>I have checked this pack and I am satisfied with it</span>
+                  <span>I have checked this pack, I am satisfied with it, and I sign the director’s certificate</span>
                 </label>
                 <button
                   type="button"
@@ -137,7 +137,7 @@ export default function DiligenceRoom() {
             </p>
           ) : null}
           {section.submittedAt ? (
-            <p className="meta">{`Submitted ${new Date(section.submittedAt).toLocaleString()}.`}</p>
+            <p className="meta">{`Submitted ${new Date(section.submittedAt).toLocaleString("en-GB")}.`}</p>
           ) : null}
           {section.roleKey === "supplier" ? (
             <label className="consent">

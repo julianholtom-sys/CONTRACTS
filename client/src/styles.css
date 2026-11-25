@@ -592,6 +592,10 @@ textarea:focus {
   align-items: end;
 }
 
+.lookup-action .btn {
+  width: 100%;
+}
+
 .split {
   display: grid;
   grid-template-columns: 1.4fr 0.9fr;

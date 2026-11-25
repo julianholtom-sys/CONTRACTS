@@ -3,7 +3,7 @@ import { coverDetails, stampCoverDetails, ukDate } from "./coverStamp.js";
 import { db, newId, now, sha256, parseJson } from "./db.js";
 import { appendEvent } from "./events.js";
 import { readBytes, writeBytes } from "./storage.js";
-import { snapshotEnvelopeFields, envelopePlacedFields } from "./documentFields.js";
+import { snapshotEnvelopeFields, envelopePlacedFields, prefillPartyFields } from "./documentFields.js";
 import { PARTY_LABELS } from "./parties.js";
 
 async function loadOrCreateSourcePdf(template) {
@@ -339,6 +339,14 @@ export async function bakeEnvelope(envelopeId, { actor = "system" } = {}) {
       pages.forEach((p) => bakedDoc.addPage(p));
     }
 
+    const usesPack = ["three", "four"].includes(envelope.party_shape);
+    const signedPack = usesPack && envelope.dd_validated_at && envelope.dd_storage_ref;
+    if (signedPack) {
+      const packDoc = await PDFDocument.load(readBytes(envelope.dd_storage_ref));
+      const pages = await bakedDoc.copyPages(packDoc, packDoc.getPageIndices());
+      pages.forEach((p) => bakedDoc.addPage(p));
+    }
+
     // If somehow empty, keep contract only
     if (bakedDoc.getPageCount() === 0) {
       throw new Error("Bake produced an empty document");
@@ -348,6 +356,7 @@ export async function bakeEnvelope(envelopeId, { actor = "system" } = {}) {
       contractPageOffset,
       appendixStarts,
     });
+    prefillPartyFields(envelopeId);
 
     const placedFields = envelopePlacedFields(envelopeId);
     const unsigned = parties.filter(
@@ -418,6 +427,7 @@ export async function bakeEnvelope(envelopeId, { actor = "system" } = {}) {
         industry = ?,
         appendix_ids_json = ?,
         contract_page_offset = ?,
+        baked_dd_sha256 = ?,
         bake_error = NULL
        WHERE id = ?`
     ).run(
@@ -431,6 +441,7 @@ export async function bakeEnvelope(envelopeId, { actor = "system" } = {}) {
       brand.industry || envelope.industry || null,
       JSON.stringify(brand.appendices.map((a) => a.id)),
       contractPageOffset,
+      signedPack ? envelope.dd_sha256 : null,
       envelopeId
     );
 
@@ -447,6 +458,7 @@ export async function bakeEnvelope(envelopeId, { actor = "system" } = {}) {
         logo_asset_id: brand.logo?.id || null,
         appendix_ids: brand.appendices.map((a) => a.id),
         prepared_on: envelope.prepared_on || null,
+        due_diligence_pack_hash: signedPack ? envelope.dd_sha256 : null,
       },
     });
 
@@ -457,6 +469,15 @@ export async function bakeEnvelope(envelopeId, { actor = "system" } = {}) {
     ).run(err.message || "Bake failed", envelopeId);
     throw err;
   }
+}
+
+/** The signed pack travels with the contract, so an issue must carry the pack as last signed. */
+export async function bakeInSignedPack(envelopeId, { actor = "staff" } = {}) {
+  const envelope = db.prepare("SELECT * FROM envelopes WHERE id = ?").get(envelopeId);
+  if (envelope?.status !== "ready" || !envelope.dd_validated_at) return false;
+  if (envelope.baked_dd_sha256 === envelope.dd_sha256) return false;
+  await bakeEnvelope(envelopeId, { actor });
+  return true;
 }
 
 export { parseJson };

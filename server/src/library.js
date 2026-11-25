@@ -16,6 +16,7 @@ function cleanParty(input, kind) {
   const signerEmail = String(input?.signer_email || input?.signerEmail || "").trim();
   const entityId = input?.entity_id || input?.entityId || null;
   const companyNumber = String(input?.company_number || input?.companyNumber || "").trim();
+  const registeredOffice = String(input?.registered_office || input?.registeredOffice || "").trim();
   if (!KINDS.has(kind)) throw new Error("Unknown directory kind");
   if (!companyName) throw new Error("Company name is required");
   if (!signerName) throw new Error("Signee name is required");
@@ -23,7 +24,7 @@ function cleanParty(input, kind) {
     throw new Error("Role must be director, or authorised signatory if they are not a director");
   }
   if (!signerEmail || !signerEmail.includes("@")) throw new Error("A valid email is required");
-  return { companyName, signerName, signerRole, signerEmail, entityId, companyNumber };
+  return { companyName, signerName, signerRole, signerEmail, entityId, companyNumber, registeredOffice };
 }
 
 export function listDirectory(kind) {
@@ -40,6 +41,7 @@ function serializeParty(row) {
     kind: row.kind,
     company_name: row.company_name,
     company_number: row.company_number || "",
+    registered_office: row.registered_office || "",
     signer_name: row.signer_name,
     signer_role: row.signer_role,
     signer_role_label: roleLabel(row.signer_role),
@@ -112,13 +114,14 @@ export function saveDirectoryParty(input, kind) {
   const id = newId();
   db.prepare(
     `INSERT INTO directory_parties (
-      id, kind, company_name, company_number, signer_name, signer_role, signer_email, entity_id, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      id, kind, company_name, company_number, registered_office, signer_name, signer_role, signer_email, entity_id, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     id,
     kind,
     party.companyName,
     party.companyNumber,
+    party.registeredOffice,
     party.signerName,
     party.signerRole,
     party.signerEmail,
@@ -193,6 +196,7 @@ function asIncoming(party, roleKey) {
     signer_email: party.signer_email,
     signer_role: party.signer_role,
     company_number: party.company_number || "",
+    registered_office: party.registered_office || "",
     directory_party_id: party.id || null,
     is_sample: Boolean(party.is_sample),
   };

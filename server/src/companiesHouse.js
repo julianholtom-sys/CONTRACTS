@@ -192,6 +192,38 @@ export async function fetchCompanyRecord(companyNumber) {
   return { profile, officers, pscs, filings };
 }
 
+function personName(name) {
+  const [surname, rest] = String(name || "").split(",").map((part) => part.trim());
+  if (!rest) return name;
+  const titled = surname.toLowerCase().replace(/(^|[\s'-])([a-z])/g, (_, lead, letter) => lead + letter.toUpperCase());
+  return `${rest} ${titled}`;
+}
+
+/** Details only: the client supplies its own certificates when it signs, so no filings are fetched. */
+export async function lookupCompany(companyNumber) {
+  const number = normaliseCompanyNumber(companyNumber);
+  let html;
+  try {
+    html = await getText(`${CH}/company/${number}`);
+  } catch (err) {
+    if (/ 404 /.test(err.message)) throw new Error(`Companies House has no company with number ${number}`);
+    throw err;
+  }
+  const profile = parseProfile(html);
+  const officerHtml = await getText(`${CH}/company/${number}/officers`).catch(() => "");
+  const officers = officerHtml ? parsePeople(officerHtml, "officer") : [];
+  return {
+    companyNumber: profile.companyNumber || number,
+    legalName: profile.legalName,
+    status: profile.status,
+    registeredOffice: profile.registeredOffice,
+    incorporatedOn: profile.incorporatedOn,
+    directors: officers
+      .filter((officer) => !officer.resignedOn && /director/i.test(officer.role || ""))
+      .map((officer) => ({ name: personName(officer.name), role: officer.role, appointedOn: officer.appointedOn })),
+  };
+}
+
 export async function downloadFiling(url) {
   const response = await fetch(url, {
     headers: {

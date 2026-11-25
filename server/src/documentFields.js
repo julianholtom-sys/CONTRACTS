@@ -1,4 +1,4 @@
-import { db, newId } from "./db.js";
+import { db, newId, now, sha256 } from "./db.js";
 import { detectPdfFields, ROLE_LABELS } from "./detectFields.js";
 
 function roleIdsForTemplate(templateId) {
@@ -241,6 +241,45 @@ export function snapshotEnvelopeFields(envelopeId, { contractPageOffset, appendi
       );
     }
   }
+}
+
+function partyValueFor(label, party) {
+  const text = String(label || "").toLowerCase();
+  if (/company (number|no)|registration number|registered number/.test(text)) return party.company_number;
+  if (/registered office|registered address|\baddress\b/.test(text)) return party.registered_office;
+  if (/company name|registered name|trading name/.test(text)) return party.company_name;
+  if (/print name|printed name|full name|name of signatory|signer'?s name/.test(text)) return party.signer_name;
+  if (/position|job title|capacity|\btitle\b/.test(text)) {
+    return party.signer_role === "authorised_signatory" ? "Authorised signatory" : "Director";
+  }
+  return "";
+}
+
+/** Fills each party's detail boxes from what the contract already knows; the signer can still change them. */
+export function prefillPartyFields(envelopeId) {
+  const parties = db
+    .prepare("SELECT * FROM envelope_parties WHERE envelope_id = ?")
+    .all(envelopeId);
+  const filled = new Set(
+    db.prepare("SELECT field_id FROM field_values WHERE envelope_id = ?").all(envelopeId).map((row) => row.field_id)
+  );
+  const fields = db
+    .prepare("SELECT * FROM envelope_fields WHERE envelope_id = ? AND field_type = 'text'")
+    .all(envelopeId);
+  let added = 0;
+  for (const field of fields) {
+    if (filled.has(field.id)) continue;
+    const party = parties.find((row) => row.role_id === field.role_id);
+    const value = party ? String(partyValueFor(field.label, party) || "").trim() : "";
+    if (!value) continue;
+    db.prepare(
+      `INSERT INTO field_values (
+        id, envelope_id, field_id, party_id, value, value_hash, captured_at, captured_ip
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`
+    ).run(newId(), envelopeId, field.id, party.id, value, sha256(value), now());
+    added += 1;
+  }
+  return added;
 }
 
 export function fieldsForParty(envelopeId, roleId) {

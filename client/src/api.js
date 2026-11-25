@@ -66,6 +66,7 @@ export const api = {
       body: JSON.stringify(body),
     }),
   fetchPartyRegistry: (id) => request(`/api/parties/${id}/registry`, { method: "POST" }),
+  companyLookup: (number) => request(`/api/companies-house/${encodeURIComponent(number)}`),
   uploadPartyFile: (id, requirementKey, file) => {
     const body = new FormData();
     body.append("requirementKey", requirementKey);

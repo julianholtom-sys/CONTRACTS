@@ -291,7 +291,11 @@ export default function CreateEnvelope() {
           ) : null}
           <section className="party-card">
             <h3>Client</h3>
-            <PartyFields value={client} onChange={mergeParty(setClient)} records={clients} />
+            <PartyFields value={client} onChange={mergeParty(setClient)} records={clients} lookup />
+            <p className="muted">
+              The company number fills in the client’s details from Companies House. The client uploads their own
+              incorporation certificate, VAT certificate and director ID when they sign.
+            </p>
           </section>
           {shape === "four" ? (
             <section className="party-card">

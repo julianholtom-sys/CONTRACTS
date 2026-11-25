@@ -446,6 +446,7 @@ function docFromFile(roleKey, label, record, file) {
     companyName: record.company_name,
     label: file.label,
     source: file.source,
+    requirementKey: file.requirement_key || "",
     fileId: file.id,
     partyId: record.id,
     originalName: file.original_name,

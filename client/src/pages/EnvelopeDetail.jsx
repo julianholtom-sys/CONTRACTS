@@ -181,13 +181,13 @@ export default function EnvelopeDetail() {
           </p>
           {diligence.validatedAt ? (
             <p className="meta">
-              Broker signed {new Date(diligence.validatedAt).toLocaleString()}
+              Broker signed {new Date(diligence.validatedAt).toLocaleString("en-GB")}
               {diligence.signedName ? ` · ${diligence.signedName}` : ""}
               {diligence.signedIp ? ` · IP ${diligence.signedIp}` : ""}.
             </p>
           ) : diligence.compiledAt ? (
             <p className="meta">
-              Compiled {new Date(diligence.compiledAt).toLocaleString()}. Waiting
+              Compiled {new Date(diligence.compiledAt).toLocaleString("en-GB")}. Waiting
               for the broker to sign.
             </p>
           ) : (
@@ -502,7 +502,11 @@ export default function EnvelopeDetail() {
             <p className="muted">
               Send stays unavailable until the broker has signed this pack.
             </p>
-          ) : null}
+          ) : (
+            <p className="muted">
+              The signed pack is added to the contract as an extra document when the contract is sent.
+            </p>
+          )}
         </section>
       ) : null}
 
@@ -594,7 +598,7 @@ export default function EnvelopeDetail() {
               {[...(envelope.events || [])].reverse().map((entry) => (
                 <li key={entry.id}>
                   <strong>{eventLabel(entry.event_type)}</strong>
-                  <span className="muted">{new Date(entry.created_at).toLocaleString()}</span>
+                  <span className="muted">{new Date(entry.created_at).toLocaleString("en-GB")}</span>
                   <span className="muted">
                     {entry.actor}
                     {entry.ip ? ` · IP ${entry.ip}` : ""}

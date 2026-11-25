@@ -5,7 +5,13 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { db, newId, now, sha256, parseJson } from "./db.js";
 import { appendEvent, listEvents, verifyEventChain } from "./events.js";
-import { bakeEnvelope, resolveBrandPack, getMasterTemplate, listAppendices } from "./bake.js";
+import {
+  bakeEnvelope,
+  bakeInSignedPack,
+  resolveBrandPack,
+  getMasterTemplate,
+  listAppendices,
+} from "./bake.js";
 import {
   CONSENT_TEXT,
   applySignatureAndCompleteParty,
@@ -19,6 +25,7 @@ import {
 } from "./signing.js";
 import { ensureSeed, ensureSigningEvidence } from "./seed.js";
 import { isPublicApi, login, logout, userFromRequest } from "./auth.js";
+import { lookupCompany } from "./companiesHouse.js";
 import {
   contractFromLibrary,
   listDirectory,
@@ -38,6 +45,7 @@ import {
 } from "./partyRecords.js";
 import {
   addNameChange,
+  assertContractMayBeIssued,
   assertDdEditable,
   compileDueDiligence,
   diligenceSession,
@@ -310,6 +318,14 @@ app.patch("/api/parties/:id", (req, res) => {
   try {
     const existing = getPartyRecord(req.params.id);
     res.json(savePartyRecord(existing.kind, { ...req.body, id: existing.id }));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.get("/api/companies-house/:number", async (req, res) => {
+  try {
+    res.json(await lookupCompany(req.params.number));
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
@@ -1194,16 +1210,17 @@ app.post("/api/envelopes", (req, res) => {
       }
       db.prepare(
         `INSERT INTO envelope_parties (
-          id, envelope_id, role_id, company_name, company_number, directory_party_id,
+          id, envelope_id, role_id, company_name, company_number, registered_office, directory_party_id,
           signer_name, signer_email, signer_role,
           status, order_index, is_sample
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`
       ).run(
         newId(),
         envelopeId,
         role.id,
         incoming.company_name,
         incoming.company_number || "",
+        incoming.registered_office || "",
         incoming.directory_party_id || null,
         incoming.signer_name,
         incoming.signer_email,
@@ -1248,6 +1265,8 @@ app.post("/api/envelopes/:id/bake", async (req, res) => {
 app.post("/api/envelopes/:id/send", async (req, res) => {
   try {
     const baseUrl = publicBase(req);
+    assertContractMayBeIssued(req.params.id);
+    await bakeInSignedPack(req.params.id, { actor: "staff" });
     const result = startSigningInvites(req.params.id, baseUrl, "staff");
     res.json({ ...getEnvelopeBundle(req.params.id), invite: result });
   } catch (err) {
@@ -1743,8 +1762,9 @@ app.post("/api/diligence/:token/sign", async (req, res) => {
   }
 });
 
-app.post("/api/envelopes/:id/parties/:partyId/link", (req, res) => {
+app.post("/api/envelopes/:id/parties/:partyId/link", async (req, res) => {
   try {
+    await bakeInSignedPack(req.params.id, { actor: "staff" });
     const result = inviteParty(req.params.id, req.params.partyId, {
       baseUrl: publicBase(req),
       actor: "staff",
