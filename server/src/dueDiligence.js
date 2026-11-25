@@ -6,6 +6,7 @@ import { DD_REQUIREMENTS, OFFICE_CHANGE_ITEM, PARTY_LABELS } from "./parties.js"
 import { packSources } from "./partyRecords.js";
 import { buildDueDiligencePdf, CERTIFICATE_SIGNATURE } from "./ddPack.js";
 import { pdfText, ukDate } from "./coverStamp.js";
+import { describeSignature } from "./signatureInput.js";
 
 const ACCEPTED = ["application/pdf", "image/jpeg", "image/png"];
 
@@ -427,7 +428,7 @@ const DD_CONSENT =
 
 export async function signDueDiligence(envelopeId, {
   partyId,
-  signatureDataUrl,
+  signature,
   typedName,
   ip,
   userAgent,
@@ -445,13 +446,11 @@ export async function signDueDiligence(envelopeId, {
   if (!party || party.envelope_id !== envelopeId || role?.role_key !== "agency") {
     throw new Error("Only the broker signs the due diligence pack");
   }
-  if (!String(signatureDataUrl || "").startsWith("data:image/png")) {
-    throw new Error("Draw your signature");
-  }
+  if (!signature?.dataUrl) throw new Error("Add your signature");
   const signerName = String(typedName || party.signer_name || "").trim();
   if (!signerName) throw new Error("Enter the name you are signing with");
 
-  const sigFile = writeBase64Png("signatures", `dd-${envelopeId}-${Date.now()}.png`, signatureDataUrl);
+  const sigFile = writeBase64Png("signatures", `dd-${envelopeId}-${Date.now()}.png`, signature.dataUrl);
   const pdf = await PDFDocument.load(readBytes(envelope.dd_storage_ref));
   const font = await pdf.embedFont(StandardFonts.Helvetica);
   const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
@@ -464,7 +463,7 @@ export async function signDueDiligence(envelopeId, {
     const scale = Math.min((box.w - 16) / image.width, (box.h - 12) / image.height, 1);
     page.drawImage(image, {
       x: box.x + 8,
-      y: box.y + 6,
+      y: box.y + (box.h - image.height * scale) / 2,
       width: image.width * scale,
       height: image.height * scale,
     });
@@ -472,7 +471,7 @@ export async function signDueDiligence(envelopeId, {
     page.drawText(pdfText(ukDate(signedAt)), { x: box.x + 34, y: box.y - 52, size: 11, font: bold, color: ink });
     const evidence = [
       `Signed by ${signerName} in Contract Builder at ${ukDate(signedAt)} ${signedAt.slice(11, 19)} UTC`,
-      `IP ${ip || "—"} · ${party.signer_email}`,
+      `${describeSignature(signature.method, signature.font)} · IP ${ip || "—"} · ${party.signer_email}`,
     ];
     evidence.forEach((line, i) => {
       page.drawText(pdfText(line), {
@@ -488,7 +487,17 @@ export async function signDueDiligence(envelopeId, {
   }
 
   const out = Buffer.from(await pdf.save());
-  return finishDueDiligenceSignature({ envelopeId, partyId, out, signedAt, signerName, ip, sigFile, userAgent });
+  return finishDueDiligenceSignature({
+    envelopeId,
+    partyId,
+    out,
+    signedAt,
+    signerName,
+    ip,
+    sigFile,
+    userAgent,
+    signature,
+  });
 }
 
 /** Packs compiled before the director's certificate existed get a signature page before the back cover. */
@@ -543,7 +552,7 @@ async function appendSignaturePage(pdf, { envelope, party, image, font, bold, si
   });
 }
 
-function finishDueDiligenceSignature({ envelopeId, partyId, out, signedAt, signerName, ip, sigFile, userAgent }) {
+function finishDueDiligenceSignature({ envelopeId, partyId, out, signedAt, signerName, ip, sigFile, userAgent, signature }) {
   const stored = writeBytes("diligence", `${envelopeId}-due-diligence.pdf`, out);
   db.prepare(
     `UPDATE envelopes
@@ -565,7 +574,12 @@ function finishDueDiligenceSignature({ envelopeId, partyId, out, signedAt, signe
     partyId,
     actor: "party",
     eventType: "dd_signed",
-    metadata: { file_hash: stored.sha256, signer_name: signerName },
+    metadata: {
+      file_hash: stored.sha256,
+      signer_name: signerName,
+      method: signature.method,
+      ...(signature.font ? { font: signature.font } : {}),
+    },
     ip,
     userAgent,
   });

@@ -26,6 +26,7 @@ import {
 import { ensureSeed, ensureSigningEvidence } from "./seed.js";
 import { isPublicApi, login, logout, userFromRequest } from "./auth.js";
 import { lookupCompany } from "./companiesHouse.js";
+import { readSignatureInput } from "./signatureInput.js";
 import {
   contractFromLibrary,
   listDirectory,
@@ -1497,16 +1498,17 @@ app.post("/api/sign/:token/sign", async (req, res) => {
   try {
     const token = resolveToken(req.params.token);
     if (!token) return res.status(401).json({ error: "Invalid or expired token" });
-    const { signatureDataUrl, method = "drawn", typedName, consent } = req.body || {};
+    const { typedName, consent } = req.body || {};
     if (!consent) return res.status(400).json({ error: "Consent required" });
-    if (!signatureDataUrl) return res.status(400).json({ error: "Signature required" });
+    const signature = readSignatureInput(req.body);
     const { ip, userAgent } = clientMeta(req);
 
     const result = await applySignatureAndCompleteParty({
       envelopeId: token.envelope_id,
       partyId: token.party_id,
-      method,
-      signatureDataUrl,
+      method: signature.method,
+      font: signature.font,
+      signatureDataUrl: signature.dataUrl,
       typedName,
       ip,
       userAgent,
@@ -1751,7 +1753,7 @@ app.post("/api/diligence/:token/sign", async (req, res) => {
     const { ip, userAgent } = clientMeta(req);
     await signDueDiligence(token.envelope_id, {
       partyId: token.party_id,
-      signatureDataUrl: req.body?.signatureDataUrl,
+      signature: readSignatureInput(req.body),
       typedName: req.body?.typedName,
       ip,
       userAgent,

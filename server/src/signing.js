@@ -173,6 +173,7 @@ export async function applySignatureAndCompleteParty({
   envelopeId,
   partyId,
   method,
+  font = null,
   signatureDataUrl,
   typedName,
   ip,
@@ -223,14 +224,15 @@ export async function applySignatureAndCompleteParty({
   const sigId = newId();
   db.prepare(
     `INSERT INTO signatures (
-      id, party_id, envelope_id, method, signature_asset_ref, document_hash,
+      id, party_id, envelope_id, method, signature_font, signature_asset_ref, document_hash,
       consent_text, consent_given_at, signed_at, ip, user_agent
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     sigId,
     partyId,
     envelopeId,
     method,
+    font,
     sigFile.storageRef,
     envelope.baked_hash,
     CONSENT_TEXT,
@@ -303,6 +305,7 @@ export async function applySignatureAndCompleteParty({
       signature_id: sigId,
       document_hash: envelope.baked_hash,
       method,
+      ...(font ? { font } : {}),
     },
     ip,
     userAgent,
@@ -513,11 +516,14 @@ export async function finalizeEnvelope(envelopeId) {
         ? Number(field.page || 0)
         : pageOffset + (field.page || 0);
       const page = pages[Math.min(pageIndex, pages.length - 1)];
+      const box = { x: Number(field.x), y: Number(field.y), w: Number(field.w), h: Number(field.h) };
+      const scale = Math.min(box.w / image.width, box.h / image.height);
+      const height = image.height * scale;
       page.drawImage(image, {
-        x: Number(field.x),
-        y: Number(field.y),
-        width: Number(field.w),
-        height: Number(field.h),
+        x: box.x,
+        y: box.y + (box.h - height) / 2,
+        width: image.width * scale,
+        height,
       });
     }
   }

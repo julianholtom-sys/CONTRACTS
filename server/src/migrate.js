@@ -63,6 +63,7 @@ export function migrate() {
   ensureColumn("envelopes", "dd_signed_name", "TEXT");
   ensureColumn("envelopes", "dd_signed_ip", "TEXT");
   ensureColumn("envelopes", "dd_signature_ref", "TEXT");
+  ensureColumn("signatures", "signature_font", "TEXT");
   ensureColumn("envelope_parties", "dd_submitted_at", "TEXT");
   ensureColumn("envelope_parties", "signer_role", "TEXT");
   ensureColumn("envelope_parties", "is_sample", "INTEGER NOT NULL DEFAULT 0");

@@ -10,7 +10,7 @@ export default function DiligenceRoom() {
   const [busy, setBusy] = useState("");
   const [previousName, setPreviousName] = useState("");
   const [newName, setNewName] = useState("");
-  const [signatureDataUrl, setSignatureDataUrl] = useState("");
+  const [signature, setSignature] = useState(null);
   const [consent, setConsent] = useState(false);
 
   async function reload() {
@@ -78,7 +78,7 @@ export default function DiligenceRoom() {
             ) : (
               <>
                 <p>{session.consent}</p>
-                <SignaturePad onChange={setSignatureDataUrl} />
+                <SignaturePad onChange={setSignature} defaultName={session.party.signer_name} />
                 <label className="consent">
                   <input
                     type="checkbox"
@@ -90,11 +90,13 @@ export default function DiligenceRoom() {
                 <button
                   type="button"
                   className="btn"
-                  disabled={busy || !session.compiled || !consent || !signatureDataUrl || locked}
+                  disabled={busy || !session.compiled || !consent || !signature || locked}
                   onClick={() =>
                     run("sign", () =>
                       api.signDiligence(token, {
-                        signatureDataUrl,
+                        signatureDataUrl: signature.dataUrl,
+                        method: signature.method,
+                        font: signature.font,
                         typedName: session.party.signer_name,
                         consent,
                       })

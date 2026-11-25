@@ -7,7 +7,7 @@ export default function SignRoom() {
   const { token } = useParams();
   const [session, setSession] = useState(null);
   const [error, setError] = useState("");
-  const [signatureDataUrl, setSignatureDataUrl] = useState("");
+  const [signature, setSignature] = useState(null);
   const [consent, setConsent] = useState(false);
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(false);
@@ -66,10 +66,11 @@ export default function SignRoom() {
     try {
       await saveDateFields();
       await api.sign(token, {
-        signatureDataUrl,
-        method: "drawn",
+        signatureDataUrl: signature.dataUrl,
+        method: signature.method,
+        font: signature.font,
         consent,
-        typedName: session.party.signer_name,
+        typedName: signature.text || session.party.signer_name,
       });
       setDone(true);
       await reload();
@@ -245,9 +246,9 @@ export default function SignRoom() {
 
           <div>
             <div className="muted" style={{ marginBottom: "0.4rem" }}>
-              Draw signature
+              Your signature
             </div>
-            <SignaturePad onChange={setSignatureDataUrl} />
+            <SignaturePad onChange={setSignature} defaultName={session.party.signer_name} />
           </div>
 
           {error ? <p className="error">{error}</p> : null}
@@ -261,7 +262,7 @@ export default function SignRoom() {
             disabled={
               busy ||
               !consent ||
-              !signatureDataUrl ||
+              !signature ||
               !session.is_turn ||
               !gateOk ||
               missingFields.length > 0

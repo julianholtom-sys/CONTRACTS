@@ -2,6 +2,7 @@ import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import { db } from "./db.js";
 import { listEvents, verifyEventChain } from "./events.js";
 import { FINAL_EVIDENCE } from "./parties.js";
+import { describeSignature } from "./signatureInput.js";
 
 const EVENT_LABELS = {
   envelope_created: "Contract created",
@@ -143,6 +144,7 @@ export async function buildAuditCertificate({
       .get(envelope.id, party.id);
     line(`Received the file: ${fmt(received?.created_at || opened?.created_at)}`);
     line(`Signed: ${fmt(signed?.signed_at)}`);
+    if (signed) line(`Signature: ${describeSignature(signed.method, signed.signature_font)}`);
     line(`IP address: ${signed?.ip || opened?.ip || "—"}`);
     if (opened?.created_at) line(`Opened: ${fmt(opened.created_at)} · IP ${opened.ip || "—"}`);
     if (signed?.user_agent) line(`Device: ${signed.user_agent}`, { indent: 12, size: 9 });
