@@ -1,6 +1,35 @@
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import { api } from "../api.js";
+
+const EVENT_LABELS = {
+  envelope_created: "Contract created",
+  envelope_baked: "Contract assembled",
+  invitation_sent: "Invitation sent",
+  invitation_resent: "Invitation reissued",
+  reminder_sent: "Reminder sent",
+  document_viewed: "Opened the contract",
+  field_completed: "Completed a field",
+  evidence_uploaded: "Attached a supporting document",
+  dd_file_uploaded: "Added a due diligence document",
+  dd_compiled: "Compiled the due diligence pack",
+  dd_request_sent: "Due diligence request emailed",
+  dd_review_sent: "Broker asked to sign the due diligence pack",
+  dd_submitted: "Submitted due diligence documents",
+  dd_signed: "Broker signed the due diligence pack",
+  dd_validated: "Broker signed the due diligence pack",
+  consent_given: "Gave electronic-signature consent",
+  signed: "Signed",
+  declined: "Declined",
+  voided: "Voided",
+  completed: "All parties complete",
+  copies_distributed: "Completed copies recorded",
+  turn_notification_sent: "Next-party notice sent",
+};
+
+function eventLabel(type) {
+  return EVENT_LABELS[type] || String(type || "").replace(/_/g, " ");
+}
 
 export default function EnvelopeDetail() {
   const { id } = useParams();
@@ -9,10 +38,17 @@ export default function EnvelopeDetail() {
   const [busy, setBusy] = useState("");
   const [links, setLinks] = useState({});
   const [chain, setChain] = useState(null);
+  const [nameDraft, setNameDraft] = useState({});
+  const [checks, setChecks] = useState({});
 
   async function reload() {
     const data = await api.getEnvelope(id);
     setEnvelope(data);
+    const next = {};
+    for (const doc of data.due_diligence?.documents || []) {
+      next[doc.key] = { receivedOn: doc.receivedOn || "", checkedOn: doc.checkedOn || "" };
+    }
+    setChecks(next);
     setChain(await api.verifyEvents(id));
   }
 
@@ -36,10 +72,16 @@ export default function EnvelopeDetail() {
   if (!envelope && !error) return <p className="muted">Loading contract…</p>;
   if (!envelope) return <p className="error">{error}</p>;
 
+  const diligence = envelope.due_diligence;
+  const issueBlocked = Boolean(diligence?.applies && !diligence.validatedAt);
+
   return (
     <div>
       <section className="hero-panel">
-        <h1>{envelope.title}</h1>
+        <h1>
+          {envelope.title}{" "}
+          {envelope.is_sample ? <span className="badge draft">Sample</span> : null}
+        </h1>
         <p>
           {envelope.entity?.display_name} ·{" "}
           <span className={`badge ${envelope.status}`}>{envelope.status}</span>
@@ -52,6 +94,18 @@ export default function EnvelopeDetail() {
           Prepared {envelope.prepared_on || "—"} · Issued{" "}
           {envelope.issued_at ? String(envelope.issued_at).slice(0, 10) : "on send"}
         </p>
+        {envelope.is_sample ? (
+          <p className="muted">
+            Bailey, Northwind, Casey and Nina North are examples used to fill fields for testing.
+          </p>
+        ) : null}
+        {envelope.status === "completed" ? (
+          <p className="muted">
+            The completed PDF binds every requested attachment, then ends with the
+            audit trail: who received the file, when they signed, and their IP
+            address. Every party receives that same bound copy.
+          </p>
+        ) : null}
       </section>
 
       {envelope.bake_error ? <p className="error">Bake error: {envelope.bake_error}</p> : null}
@@ -69,7 +123,7 @@ export default function EnvelopeDetail() {
         <button
           className="btn secondary"
           type="button"
-          disabled={busy || envelope.status !== "ready"}
+          disabled={busy || envelope.status !== "ready" || issueBlocked}
           onClick={() => run("send", () => api.sendEnvelope(id))}
         >
           {busy === "send" ? "Sending…" : "Send first invitation"}
@@ -85,7 +139,7 @@ export default function EnvelopeDetail() {
               Completed PDF
             </a>
             <a className="btn secondary" href={api.documentUrl(id, "certificate")} target="_blank" rel="noreferrer">
-              Certificate
+              Audit trail
             </a>
           </>
         ) : null}
@@ -100,6 +154,307 @@ export default function EnvelopeDetail() {
           Void
         </button>
       </div>
+
+      {diligence?.applies ? (
+        <section className="panel" style={{ marginBottom: "1.25rem" }}>
+          <h2>Due diligence pack</h2>
+          <p className="muted">
+            The pack is built in the app. Companies House filings and the sanctions
+            check come from the company number. Attach only the documents that
+            cannot be fetched, enter the received and checked dates for this
+            client, then compile the pack and sign it here.
+          </p>
+          {diligence.validatedAt ? (
+            <p className="meta">
+              Broker signed {new Date(diligence.validatedAt).toLocaleString()}
+              {diligence.signedName ? ` · ${diligence.signedName}` : ""}
+              {diligence.signedIp ? ` · IP ${diligence.signedIp}` : ""}.
+            </p>
+          ) : diligence.compiledAt ? (
+            <p className="meta">
+              Compiled {new Date(diligence.compiledAt).toLocaleString()}. Waiting
+              for the broker to sign.
+            </p>
+          ) : (
+            <p className="meta">Not compiled yet.</p>
+          )}
+          {diligence.missing?.length > 0 && !diligence.validatedAt ? (
+            <ul className="audit-list">
+              {diligence.missing.map((item) => (
+                <li key={item}>
+                  <strong>Still needed</strong>
+                  <span>{item}</span>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          {diligence.records?.map((record) => (
+            <p key={record.roleKey} className="meta">
+              {record.label}: {record.companyName || "Not saved"}
+              {record.href ? (
+                <>
+                  {" "}
+                  <Link to={record.href}>Open the record</Link>
+                </>
+              ) : null}
+            </p>
+          ))}
+          {diligence.documents?.length ? (
+            <div className="form-grid">
+              {diligence.documents.map((doc) => {
+                const value = checks[doc.key] || { receivedOn: "", checkedOn: "" };
+                return (
+                  <div key={doc.key}>
+                    <strong>
+                      {doc.roleLabel}: {doc.label}
+                    </strong>
+                    <div className="signer-row">
+                      <label>
+                        Received
+                        <input
+                          type="date"
+                          value={value.receivedOn}
+                          onChange={(e) =>
+                            setChecks((current) => ({
+                              ...current,
+                              [doc.key]: { ...value, receivedOn: e.target.value },
+                            }))
+                          }
+                        />
+                      </label>
+                      <label>
+                        Checked
+                        <input
+                          type="date"
+                          value={value.checkedOn}
+                          onChange={(e) =>
+                            setChecks((current) => ({
+                              ...current,
+                              [doc.key]: { ...value, checkedOn: e.target.value },
+                            }))
+                          }
+                        />
+                      </label>
+                    </div>
+                  </div>
+                );
+              })}
+              <button
+                type="button"
+                className="btn secondary"
+                disabled={Boolean(busy)}
+                onClick={() =>
+                  run("dates", () =>
+                    api.saveDueDiligenceChecks(
+                      id,
+                      (diligence.documents || []).map((doc) => ({
+                        key: doc.key,
+                        receivedOn: checks[doc.key]?.receivedOn || "",
+                        checkedOn: checks[doc.key]?.checkedOn || "",
+                      }))
+                    )
+                  )
+                }
+              >
+                {busy === "dates" ? "Saving…" : "Save received and checked dates"}
+              </button>
+            </div>
+          ) : null}
+          {diligence.sections.filter((section) => !section.heldOnRecord).map((section) => {
+            const draft = nameDraft[section.roleKey] || { previousName: "", newName: "" };
+            return (
+              <div className="party-card" key={section.roleKey} style={{ marginTop: "1rem" }}>
+                <h3>
+                  {section.label}
+                  {section.companyName ? ` · ${section.companyName}` : ""}{" "}
+                  <span className={`badge ${section.submittedAt ? "completed" : "draft"}`}>
+                    {section.submittedAt ? "submitted" : "not submitted"}
+                  </span>
+                </h3>
+                {section.roleKey === "company" ? (
+                  <p className="muted">
+                    The client does not supply the pack itself. Add a certificate
+                    for each name change, if the company has had one.
+                  </p>
+                ) : null}
+                {section.roleKey === "supplier" ? (
+                  <label className="consent">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(section.officeChanged)}
+                      onChange={(e) =>
+                        run("office", () => api.setOfficeChanged(id, e.target.checked))
+                      }
+                    />
+                    <span>Registered office has changed</span>
+                  </label>
+                ) : null}
+                <div className="form-grid">
+                  {section.items
+                    .filter((item) => item.required || item.key === "registered_office")
+                    .map((item) => (
+                      <div key={item.key}>
+                        <strong>
+                          {item.label}{" "}
+                          {item.required ? (
+                            <span className={`badge ${item.satisfied ? "completed" : "sent"}`}>
+                              {item.satisfied ? "in pack" : "needed"}
+                            </span>
+                          ) : (
+                            <span className="muted">not requested</span>
+                          )}
+                        </strong>
+                        {item.file ? <p className="meta">{item.file.original_name}</p> : null}
+                        {item.required || section.officeChanged ? (
+                          <label className="muted">
+                            Upload
+                            <input
+                              type="file"
+                              accept=".pdf,.png,.jpg,.jpeg"
+                              onChange={(e) => {
+                                const file = e.target.files?.[0];
+                                e.target.value = "";
+                                if (!file) return;
+                                run(`file-${section.roleKey}-${item.key}`, () =>
+                                  api.uploadDueDiligence(id, {
+                                    roleKey: section.roleKey,
+                                    requirementKey: item.key,
+                                    file,
+                                  })
+                                );
+                              }}
+                            />
+                          </label>
+                        ) : null}
+                      </div>
+                    ))}
+                </div>
+                {section.nameChanges.map((change) => (
+                  <div key={change.id} style={{ marginTop: "0.75rem" }}>
+                    <strong>
+                      {change.label}{" "}
+                      <span className={`badge ${change.satisfied ? "completed" : "sent"}`}>
+                        {change.satisfied ? "in pack" : "needed"}
+                      </span>
+                    </strong>
+                    {change.file ? <p className="meta">{change.file.original_name}</p> : null}
+                    <div className="toolbar">
+                      <label className="muted">
+                        Upload certificate and resolution
+                        <input
+                          type="file"
+                          accept=".pdf,.png,.jpg,.jpeg"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            e.target.value = "";
+                            if (!file) return;
+                            run(`change-${change.id}`, () =>
+                              api.uploadDueDiligence(id, {
+                                roleKey: section.roleKey,
+                                nameChangeId: change.id,
+                                file,
+                              })
+                            );
+                          }}
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        className="btn secondary"
+                        onClick={() => run(`drop-${change.id}`, () => api.removeNameChange(id, change.id))}
+                      >
+                        Remove change
+                      </button>
+                    </div>
+                  </div>
+                ))}
+                <div className="signer-row" style={{ marginTop: "0.75rem" }}>
+                  <label>
+                    Previous name
+                    <input
+                      value={draft.previousName}
+                      placeholder="Name before the change"
+                      onChange={(e) =>
+                        setNameDraft((prev) => ({
+                          ...prev,
+                          [section.roleKey]: { ...draft, previousName: e.target.value },
+                        }))
+                      }
+                    />
+                  </label>
+                  <label>
+                    New name
+                    <input
+                      value={draft.newName}
+                      placeholder="Name after the change"
+                      onChange={(e) =>
+                        setNameDraft((prev) => ({
+                          ...prev,
+                          [section.roleKey]: { ...draft, newName: e.target.value },
+                        }))
+                      }
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    className="btn secondary"
+                    onClick={() =>
+                      run(`add-${section.roleKey}`, async () => {
+                        await api.addNameChange(id, {
+                          roleKey: section.roleKey,
+                          previousName: draft.previousName,
+                          newName: draft.newName,
+                        });
+                        setNameDraft((prev) => ({
+                          ...prev,
+                          [section.roleKey]: { previousName: "", newName: "" },
+                        }));
+                      })
+                    }
+                  >
+                    Add name change
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+          <div className="toolbar" style={{ marginTop: "1rem" }}>
+            <button
+              type="button"
+              className="btn"
+              disabled={busy || !diligence.readyToCompile || Boolean(diligence.validatedAt)}
+              onClick={() => run("compile", () => api.compileDueDiligence(id))}
+            >
+              {busy === "compile" ? "Compiling…" : "Compile the pack"}
+            </button>
+            {diligence.hasFile && !diligence.validatedAt ? (
+              <button
+                type="button"
+                className="btn secondary"
+                disabled={Boolean(busy)}
+                onClick={() =>
+                  run("sign", async () => {
+                    const result = await api.dueDiligenceSignLink(id);
+                    window.location.assign(result.url);
+                  })
+                }
+              >
+                {busy === "sign" ? "Opening…" : "Sign the pack"}
+              </button>
+            ) : null}
+            {diligence.hasFile ? (
+              <a className="btn secondary" href={api.dueDiligenceUrl(id)} target="_blank" rel="noreferrer">
+                Open due diligence pack
+              </a>
+            ) : null}
+          </div>
+          {issueBlocked ? (
+            <p className="muted">
+              Send stays unavailable until the broker has signed this pack.
+            </p>
+          ) : null}
+        </section>
+      ) : null}
 
       <section className="panel" style={{ marginBottom: "1.25rem" }}>
         <h2>Auto-applied pack</h2>
@@ -138,11 +493,21 @@ export default function EnvelopeDetail() {
                   <span className={`badge ${party.status}`}>{party.status}</span>
                 </div>
                 <p className="meta">
-                  {party.company_name} · {party.signer_email}
+                  {party.company_name} ·{" "}
+                  {party.signer_role === "authorised_signatory"
+                    ? "Authorised signatory"
+                    : party.signer_role === "director"
+                      ? "Director"
+                      : "Role not recorded"}{" "}
+                  · {party.signer_email}
+                  {party.is_sample ? " · Sample" : ""}
                 </p>
+                <p className="muted">Signs at step {party.order_index}</p>
                 {party.evidence_required ? (
-                  <p className="muted">Evidence gate required before sign</p>
-                ) : null}
+                  <p className="muted">Final evidence appendix required before sign</p>
+                ) : (
+                  <p className="muted">No final evidence appendix</p>
+                )}
                 <button
                   type="button"
                   className="btn secondary"
@@ -178,9 +543,12 @@ export default function EnvelopeDetail() {
             <ul className="audit-list">
               {[...(envelope.events || [])].reverse().map((entry) => (
                 <li key={entry.id}>
-                  <strong>{entry.event_type}</strong>
+                  <strong>{eventLabel(entry.event_type)}</strong>
                   <span className="muted">{new Date(entry.created_at).toLocaleString()}</span>
-                  <span className="muted">{entry.actor}</span>
+                  <span className="muted">
+                    {entry.actor}
+                    {entry.ip ? ` · IP ${entry.ip}` : ""}
+                  </span>
                 </li>
               ))}
             </ul>

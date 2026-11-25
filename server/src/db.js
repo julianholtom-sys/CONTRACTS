@@ -81,7 +81,8 @@ CREATE TABLE IF NOT EXISTS email_templates (
   entity_id TEXT NOT NULL REFERENCES entities(id),
   template_type TEXT NOT NULL CHECK (template_type IN (
     'invitation','resend','reminder','turn_notification',
-    'declined_notice','voided_notice','completion'
+    'declined_notice','voided_notice','completion',
+    'dd_request','dd_review'
   )),
   subject TEXT NOT NULL,
   body_html TEXT NOT NULL,
@@ -221,7 +222,7 @@ CREATE TABLE IF NOT EXISTS party_access_tokens (
 CREATE TABLE IF NOT EXISTS field_values (
   id TEXT PRIMARY KEY,
   envelope_id TEXT NOT NULL REFERENCES envelopes(id),
-  field_id TEXT NOT NULL REFERENCES template_fields(id),
+  field_id TEXT NOT NULL,
   party_id TEXT NOT NULL REFERENCES envelope_parties(id),
   value TEXT,
   value_hash TEXT,

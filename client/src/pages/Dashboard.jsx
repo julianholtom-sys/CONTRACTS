@@ -27,25 +27,21 @@ export default function Dashboard() {
   return (
     <div>
       <section className="hero-panel">
-        <h1>Contracts</h1>
-        <p>
-          Sent from Union Payroll. Every contract includes the master agreement,
-          company brand covers, and any industry appendices selected at create time.
-        </p>
+        <h1>Contracts in progress</h1>
+        <p>Drafts and contracts that have already been started.</p>
       </section>
 
       <div className="toolbar">
-        <Link className="btn" to="/new">
-          Create contract
+        <Link className="btn" to="/">
+          Start another
         </Link>
-        <span className="muted">Storage: server/data · DB: attest.sqlite</span>
       </div>
 
       {error ? <p className="error">{error}</p> : null}
       {loading ? <p className="muted">Loading…</p> : null}
 
       {!loading && envelopes.length === 0 ? (
-        <div className="empty">No contracts yet. Create one from the master template.</div>
+        <div className="empty">No contracts yet.</div>
       ) : (
         <div className="envelope-list">
           {envelopes.map((env, i) => (
@@ -56,7 +52,10 @@ export default function Dashboard() {
               style={{ animationDelay: `${Math.min(i, 8) * 0.04}s` }}
             >
               <div>
-                <h3>{env.title || "Untitled"}</h3>
+                <h3>
+                  {env.title || "Untitled"}{" "}
+                  {env.is_sample ? <span className="badge draft">Sample</span> : null}
+                </h3>
                 <div className="meta">
                   {env.entity?.display_name || "Entity"} · {env.party_count} parties ·{" "}
                   {new Date(env.created_at).toLocaleString()}

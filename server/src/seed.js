@@ -1,8 +1,12 @@
 import { db, newId, now } from "./db.js";
+import { FINAL_EVIDENCE, PARTY_LABELS } from "./parties.js";
 import { seedDefaultEmailTemplates } from "./mail.js";
-import { writeBytes } from "./storage.js";
+import { readBytes, writeBytes } from "./storage.js";
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import { migrate } from "./migrate.js";
+import { ensureAdminPassword } from "./auth.js";
+import { ensureStoredDateFields } from "./documentFields.js";
+import { ensureVerifyToken } from "./domainVerify.js";
 
 async function makePdf({ title, subtitle, lines = [], footer }) {
   const doc = await PDFDocument.create();
@@ -88,9 +92,10 @@ async function makeLogoPng() {
 
 function addRolesAndFields(templateId, withEvidence) {
   const roles = [
-    { key: "company", label: "Company", order: 1, evidence: withEvidence ? 1 : 0 },
-    { key: "agency", label: "Agency", order: 2, evidence: 0 },
-    { key: "supplier", label: "Supplier", order: 3, evidence: 0 },
+    { key: "supplier", label: "Contractor", order: 1, evidence: withEvidence ? 1 : 0 },
+    { key: "spv", label: "Supplier (SPV)", order: 2, evidence: withEvidence ? 1 : 0 },
+    { key: "agency", label: "Broker", order: 3, evidence: 0 },
+    { key: "company", label: "Client", order: 4, evidence: withEvidence ? 1 : 0 },
   ];
   const roleIds = {};
   for (const role of roles) {
@@ -104,46 +109,86 @@ function addRolesAndFields(templateId, withEvidence) {
   }
 
   if (withEvidence) {
-    const evidence = [
-      ["proof_of_address", "Proof of company address", "upload"],
-      ["proof_of_directors", "Proof of directors", "upload"],
-      ["vat_certificate", "VAT certificate", "upload"],
-      ["incorporation_cert", "Certificate of incorporation", "upload"],
-    ];
-    for (const [key, label, method] of evidence) {
+    insertEvidenceRequirements(roleIds.company, FINAL_EVIDENCE.company);
+    insertEvidenceRequirements(roleIds.supplier, FINAL_EVIDENCE.supplier);
+    insertEvidenceRequirements(roleIds.spv, FINAL_EVIDENCE.spv);
+  }
+
+  return roleIds;
+}
+
+const EVIDENCE_MIMES = JSON.stringify(["application/pdf", "image/jpeg", "image/png"]);
+
+function insertEvidenceRequirements(roleId, items) {
+  for (const [key, label] of items) {
+    const existing = db
+      .prepare(
+        "SELECT id FROM evidence_requirements WHERE role_id = ? AND requirement_key = ?"
+      )
+      .get(roleId, key);
+    if (existing) {
       db.prepare(
-        `INSERT INTO evidence_requirements (
-          id, role_id, requirement_key, label, description, accepted_mimes,
-          max_size_bytes, verify_method, is_required
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)`
-      ).run(
-        newId(),
-        roleIds.company,
-        key,
-        label,
-        label,
-        JSON.stringify(["application/pdf", "image/jpeg", "image/png"]),
-        10 * 1024 * 1024,
-        method
-      );
+        "UPDATE evidence_requirements SET label = ?, description = ?, is_required = 1 WHERE id = ?"
+      ).run(label, label, existing.id);
+      continue;
+    }
+    db.prepare(
+      `INSERT INTO evidence_requirements (
+        id, role_id, requirement_key, label, description, accepted_mimes,
+        max_size_bytes, verify_method, is_required
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'upload', 1)`
+    ).run(newId(), roleId, key, label, label, EVIDENCE_MIMES, 10 * 1024 * 1024);
+  }
+}
+
+const ROLE_ORDER = { supplier: 1, spv: 2, agency: 3, company: 4 };
+
+export function ensureSigningEvidence() {
+  const templateIds = db
+    .prepare("SELECT DISTINCT template_id FROM template_roles")
+    .all()
+    .map((row) => row.template_id);
+  for (const templateId of templateIds) {
+    const existing = db
+      .prepare("SELECT id FROM template_roles WHERE template_id = ? AND role_key = 'spv'")
+      .get(templateId);
+    if (!existing) {
+      db.prepare(
+        `INSERT INTO template_roles (
+          id, template_id, role_key, label, signing_order, evidence_required
+        ) VALUES (?, ?, 'spv', 'Supplier (SPV)', 2, 1)`
+      ).run(newId(), templateId);
     }
   }
 
-  const fields = [
-    { role: "company", key: "company_sig", label: "Company signature", type: "signature", x: 50, y: 190, w: 180, h: 36 },
-    { role: "company", key: "company_date", label: "Date", type: "date", x: 250, y: 198, w: 120, h: 20 },
-    { role: "agency", key: "agency_sig", label: "Agency signature", type: "signature", x: 50, y: 120, w: 180, h: 36 },
-    { role: "supplier", key: "supplier_sig", label: "Supplier signature", type: "signature", x: 50, y: 50, w: 180, h: 36 },
-  ];
-  for (const f of fields) {
+  const roles = db.prepare("SELECT * FROM template_roles").all();
+  for (const role of roles) {
+    const label = PARTY_LABELS[role.role_key] || role.label;
+    const order = ROLE_ORDER[role.role_key] || role.signing_order;
+    const items = FINAL_EVIDENCE[role.role_key] || [];
     db.prepare(
-      `INSERT INTO template_fields (
-        id, template_id, role_id, field_key, label, field_type, required,
-        page, x, y, w, h, validation_json
-      ) VALUES (?, ?, ?, ?, ?, ?, 1, 0, ?, ?, ?, ?, NULL)`
-    ).run(newId(), templateId, roleIds[f.role], f.key, f.label, f.type, f.x, f.y, f.w, f.h);
+      "UPDATE template_roles SET label = ?, signing_order = ?, evidence_required = ? WHERE id = ?"
+    ).run(label, order, items.length ? 1 : 0, role.id);
+    if (!items.length) continue;
+    insertEvidenceRequirements(role.id, items);
+    const keep = items.map(([key]) => key);
+    const stale = db
+      .prepare("SELECT id, requirement_key FROM evidence_requirements WHERE role_id = ?")
+      .all(role.id)
+      .filter((row) => !keep.includes(row.requirement_key));
+    for (const row of stale) {
+      db.prepare("UPDATE evidence_requirements SET is_required = 0 WHERE id = ?").run(row.id);
+    }
   }
-  return roleIds;
+  db.prepare(
+    "UPDATE template_fields SET label = 'Client signature' WHERE field_key = 'company_sig'"
+  ).run();
+  db.prepare(
+    "UPDATE template_fields SET label = 'Broker signature' WHERE field_key = 'agency_sig'"
+  ).run();
+  db.prepare(
+    "UPDATE template_fields SET label = 'Contractor signature' WHERE field_key = 'supplier_sig'"
+  ).run();
 }
 
 async function ensureEntityBrand(entityId, brandSpec) {
@@ -240,11 +285,11 @@ async function ensureSharedCatalog() {
         "This master contract is sent with every contract.",
         "Industry-specific schedules are attached as optional appendices.",
         "",
-        "Company / Agency / Supplier execution blocks appear below.",
+        "Client / Agency / Contractor execution blocks appear below.",
         "",
-        "Company signature",
+        "Client signature",
         "Agency signature",
-        "Supplier signature",
+        "Contractor signature",
       ],
       footer: "Master contract template",
     });
@@ -263,6 +308,7 @@ async function ensureSharedCatalog() {
       "Core three-party agreement included on every contract"
     );
     addRolesAndFields(templateId, true);
+    await applyMasterPdfFields(templateId, pdf, { isNew: true });
     master = db.prepare("SELECT * FROM templates WHERE id = ?").get(templateId);
   } else {
     db.prepare(
@@ -284,6 +330,20 @@ async function ensureSharedCatalog() {
     .prepare("SELECT COUNT(*) AS c FROM template_roles WHERE template_id = ?")
     .get(master.id).c;
   if (!roleCount) addRolesAndFields(master.id, true);
+  const fieldCount = db
+    .prepare("SELECT COUNT(*) AS c FROM template_fields WHERE template_id = ?")
+    .get(master.id).c;
+  if (!fieldCount && String(master.source_url || "").startsWith("local://")) {
+    try {
+      await applyMasterPdfFields(
+        master.id,
+        readBytes(master.source_url.replace("local://", "")),
+        { isNew: true }
+      );
+    } catch {
+      /* detection optional */
+    }
+  }
 
   const appendixDefs = [
     {
@@ -318,31 +378,35 @@ async function ensureSharedCatalog() {
       lines: a.lines,
     });
     const stored = writeBytes("uploads", `${a.industry}-${a.name}.pdf`, pdf);
+    const appendixId = newId();
     db.prepare(
       `INSERT INTO appendices (
         id, entity_id, industry, name, description, storage_ref, is_active, created_at
       ) VALUES (?, NULL, ?, ?, ?, ?, 1, ?)`
     ).run(
-      newId(),
+      appendixId,
       a.industry,
       a.name,
       `Optional industry appendix for ${a.industry}`,
       stored.storageRef,
       now()
     );
+    await applyAppendixPdfFields(appendixId, pdf);
   }
 }
 
 const COMPANY_DEFS = [
   {
     slug: "union-payroll",
-    legal_name: "Union Payroll Ltd",
-    company_number: "00000000",
+    legal_name: "UNION WORK SERVICES LIMITED (trading as Union Payroll)",
+    company_number: "16734536",
     vat_number: null,
-    registered_office: "22-28 Wood Street, Doncaster, England, DN1 3LW",
+    registered_office:
+      "International House, 22-28 Wood Street, Doncaster, United Kingdom, DN1 3LW",
     display_name: "Union Payroll",
     sending_domain: "union-payroll.ltd",
-    from_address: "contracts@union-payroll.ltd",
+    from_address: "hello@union-payroll.ltd",
+    reply_to: "hello@union-payroll.ltd",
     brand: {
       primary: "#0074ff",
       secondary: "#101828",
@@ -350,86 +414,14 @@ const COMPANY_DEFS = [
       backColor: [0.063, 0.094, 0.157],
     },
   },
-  {
-    slug: "acme",
-    legal_name: "Acme Contracting Limited",
-    company_number: "12345678",
-    vat_number: "GB123456789",
-    registered_office: "1 Example Street, London, EC1A 1BB",
-    display_name: "Acme",
-    sending_domain: "acme.local",
-    from_address: "documents@acme.local",
-    brand: {
-      primary: "#0074ff",
-      secondary: "#101828",
-      frontColor: [0.0, 0.455, 1.0],
-      backColor: [0.063, 0.094, 0.157],
-    },
-  },
-  {
-    slug: "northwind",
-    legal_name: "Northwind Facilities Ltd",
-    company_number: "23456789",
-    vat_number: "GB234567890",
-    registered_office: "22 Harbour Road, Bristol, BS1 4ST",
-    display_name: "Northwind",
-    sending_domain: "northwind.local",
-    from_address: "contracts@northwind.local",
-    brand: {
-      primary: "#1f4e79",
-      secondary: "#0b1f33",
-      frontColor: [0.12, 0.3, 0.47],
-      backColor: [0.04, 0.12, 0.2],
-    },
-  },
-  {
-    slug: "contoso",
-    legal_name: "Contoso Health Group PLC",
-    company_number: "34567890",
-    vat_number: "GB345678901",
-    registered_office: "8 Clinic Way, Manchester, M1 2AB",
-    display_name: "Contoso Health",
-    sending_domain: "contoso.local",
-    from_address: "esign@contoso.local",
-    brand: {
-      primary: "#7a1f3d",
-      secondary: "#2a0f18",
-      frontColor: [0.48, 0.12, 0.24],
-      backColor: [0.16, 0.06, 0.09],
-    },
-  },
-  {
-    slug: "fabrikam",
-    legal_name: "Fabrikam Technology Limited",
-    company_number: "45678901",
-    vat_number: "GB456789012",
-    registered_office: "100 Silicon Quay, Cambridge, CB2 1AA",
-    display_name: "Fabrikam",
-    sending_domain: "fabrikam.local",
-    from_address: "legal@fabrikam.local",
-    brand: {
-      primary: "#5b4b8a",
-      secondary: "#1d1830",
-      frontColor: [0.36, 0.29, 0.54],
-      backColor: [0.11, 0.09, 0.19],
-    },
-  },
-  {
-    slug: "adventureworks",
-    legal_name: "Adventure Works Construction Ltd",
-    company_number: "56789012",
-    vat_number: "GB567890123",
-    registered_office: "14 Yard Lane, Leeds, LS1 4DY",
-    display_name: "Adventure Works",
-    sending_domain: "adventureworks.local",
-    from_address: "docs@adventureworks.local",
-    brand: {
-      primary: "#8a5a12",
-      secondary: "#2b1d08",
-      frontColor: [0.54, 0.35, 0.07],
-      backColor: [0.17, 0.11, 0.03],
-    },
-  },
+];
+
+const RETIRED_DEMO_SLUGS = [
+  "acme",
+  "northwind",
+  "contoso",
+  "fabrikam",
+  "adventureworks",
 ];
 
 async function ensureCompanies(userId) {
@@ -459,7 +451,7 @@ async function ensureCompanies(userId) {
         }),
         def.sending_domain,
         def.from_address,
-        `ops@${def.sending_domain}`,
+        def.reply_to || `hello@${def.sending_domain}`,
         `<p>Kind regards,<br/>${def.display_name}</p>`,
         `Kind regards,\n${def.display_name}`,
         now()
@@ -471,7 +463,37 @@ async function ensureCompanies(userId) {
       }
       seedDefaultEmailTemplates(entityId, userId);
       entity = db.prepare("SELECT * FROM entities WHERE id = ?").get(entityId);
+    } else {
+      db.prepare(
+        `UPDATE entities SET
+          legal_name = ?,
+          company_number = ?,
+          vat_number = ?,
+          registered_office = ?,
+          display_name = ?,
+          sending_domain = ?,
+          from_address = ?,
+          reply_to = ?,
+          domain_verified = 1,
+          is_active = 1
+         WHERE id = ?`
+      ).run(
+        def.legal_name,
+        def.company_number,
+        def.vat_number,
+        def.registered_office,
+        def.display_name,
+        def.sending_domain,
+        def.from_address,
+        def.reply_to || entity.reply_to,
+        entity.id
+      );
+      entity = db.prepare("SELECT * FROM entities WHERE id = ?").get(entity.id);
     }
+    if (entity.domain_verified && !entity.domain_verified_at) {
+      db.prepare("UPDATE entities SET domain_verified_at = ? WHERE id = ?").run(now(), entity.id);
+    }
+    ensureVerifyToken(entity.id);
     await ensureEntityBrand(entity.id, {
       label: def.display_name,
       primary: def.brand.primary,
@@ -480,6 +502,31 @@ async function ensureCompanies(userId) {
       backColor: def.brand.backColor,
     });
   }
+
+  if (RETIRED_DEMO_SLUGS.length) {
+    const placeholders = RETIRED_DEMO_SLUGS.map(() => "?").join(",");
+    db.prepare(
+      `UPDATE entities SET is_active = 0 WHERE slug IN (${placeholders})`
+    ).run(...RETIRED_DEMO_SLUGS);
+  }
+}
+
+function markSampleRecords() {
+  const sample = "%Bailey%|%Baily%|%Northwind%|%Contoso Contracting%|%Casey%|%Nina North%";
+  for (const name of sample.split("|")) {
+    db.prepare(
+      "UPDATE directory_parties SET is_sample = 1 WHERE company_name LIKE ? OR signer_name LIKE ?"
+    ).run(name, name);
+    db.prepare(
+      "UPDATE envelope_parties SET is_sample = 1 WHERE company_name LIKE ? OR signer_name LIKE ?"
+    ).run(name, name);
+  }
+  db.prepare("UPDATE library_templates SET is_sample = 1 WHERE name LIKE '%Northwind%' OR name LIKE '%Bailey%' OR name LIKE '%Baily%'").run();
+  db.prepare(
+    `UPDATE envelopes SET is_sample = 1
+     WHERE title LIKE '%Northwind%' OR title LIKE '%Bailey%' OR title LIKE '%Baily%'
+        OR id IN (SELECT envelope_id FROM envelope_parties WHERE is_sample = 1)`
+  ).run();
 }
 
 export async function ensureSeed() {
@@ -496,7 +543,16 @@ export async function ensureSeed() {
 
   await ensureCompanies(user.id);
   await ensureSharedCatalog();
+  ensureSigningEvidence();
+  for (const entity of db.prepare("SELECT id FROM entities").all()) {
+    seedDefaultEmailTemplates(entity.id, user.id);
+  }
+  ensureAdminPassword();
+  markSampleRecords();
+  for (const template of db.prepare("SELECT id FROM templates").all()) {
+    ensureStoredDateFields(template.id);
+  }
 
-  const count = db.prepare("SELECT COUNT(*) AS c FROM entities").get().c;
+  const count = db.prepare("SELECT COUNT(*) AS c FROM entities WHERE is_active = 1").get().c;
   return { seeded: true, companies: count, userId: user.id };
 }

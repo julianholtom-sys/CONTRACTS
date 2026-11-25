@@ -13,17 +13,90 @@ import {
   evidenceGateOpen,
   getActionableParty,
   inviteParty,
+  issuePartyToken,
   resolveToken,
   startSigningInvites,
 } from "./signing.js";
-import { ensureSeed } from "./seed.js";
+import { ensureSeed, ensureSigningEvidence } from "./seed.js";
+import { isPublicApi, login, logout, userFromRequest } from "./auth.js";
+import {
+  contractFromLibrary,
+  listDirectory,
+  listLibrary,
+  saveBrokerSignatory,
+  saveLibraryTemplate,
+} from "./library.js";
+import { SIGN_ORDER } from "./parties.js";
+import {
+  getPartyRecord,
+  listPartyRecords,
+  readPartyFile,
+  refreshPartyRegistry,
+  saveDocChecks,
+  savePartyRecord,
+  savePartyUpload,
+} from "./partyRecords.js";
+import {
+  addNameChange,
+  assertDdEditable,
+  compileDueDiligence,
+  diligenceSession,
+  dueDiligenceState,
+  readDueDiligence,
+  removeNameChange,
+  saveDueDiligenceFile,
+  setOfficeChanged,
+  signDueDiligence,
+  submitDueDiligence,
+} from "./dueDiligence.js";
 import { seedDefaultEmailTemplates, listOutboundEmails } from "./mail.js";
 import { readBytes, writeBytes } from "./storage.js";
+import { fetchRemoteImageDataUrl, normalizeGmailSignature } from "./gmailSignature.js";
+import {
+  confirmVerifyCode,
+  ensureVerifyToken,
+  latestVerifyEmail,
+  sendVerifyCode,
+  serializeDomainVerify,
+  clearVerification,
+  verifyDns,
+} from "./domainVerify.js";
+import { smtpConfig, verifySmtp, deliverMail } from "./smtp.js";
+import { getComplianceCompany, publicCompliance, saveComplianceCompany } from "./compliance.js";
+import {
+  applyAppendixPdfFields,
+  applyMasterPdfFields,
+  fieldsForParty,
+  getSignField,
+  listAppendixFields,
+} from "./documentFields.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 8787);
 const isProd = process.env.NODE_ENV === "production";
 const BASE_URL = process.env.PUBLIC_BASE_URL || `http://localhost:${PORT}`;
+
+function assetMime(file) {
+  const name = String(file.originalname || "").toLowerCase();
+  const mime = String(file.mimetype || "").toLowerCase();
+  const head = file.buffer
+    ? file.buffer.subarray(0, 256).toString("utf8").trimStart()
+    : "";
+  if (name.endsWith(".svg") || mime.includes("svg") || /^<svg[\s>]|^<\?xml[\s\S]*<svg[\s>]/i.test(head)) {
+    return "image/svg+xml";
+  }
+  if (mime && mime !== "application/octet-stream") return mime;
+  if (name.endsWith(".png")) return "image/png";
+  if (name.endsWith(".jpg") || name.endsWith(".jpeg")) return "image/jpeg";
+  if (name.endsWith(".gif")) return "image/gif";
+  if (name.endsWith(".webp")) return "image/webp";
+  if (name.endsWith(".pdf")) return "application/pdf";
+  if (name.endsWith(".docx")) {
+    return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+  }
+  if (name.endsWith(".doc")) return "application/msword";
+  return mime || "application/octet-stream";
+}
 
 function publicBase(req) {
   if (process.env.PUBLIC_BASE_URL) return process.env.PUBLIC_BASE_URL.replace(/\/$/, "");
@@ -41,8 +114,37 @@ function publicBase(req) {
 await ensureSeed();
 
 const app = express();
-app.use(cors());
+app.use(cors({ origin: true, credentials: true }));
 app.use(express.json({ limit: "20mb" }));
+app.use((req, res, next) => {
+  if (!req.path.startsWith("/api")) return next();
+  if (isPublicApi(req) || req.path.startsWith("/api/auth/")) return next();
+  const user = userFromRequest(req);
+  if (!user) return res.status(401).json({ error: "Sign in required" });
+  req.user = user;
+  next();
+});
+
+app.post("/api/auth/login", (req, res) => {
+  try {
+    const result = login(req.body?.email, req.body?.password);
+    res.setHeader("Set-Cookie", result.cookie);
+    res.json({ user: result.user });
+  } catch (err) {
+    res.status(401).json({ error: err.message || "Sign in failed" });
+  }
+});
+
+app.post("/api/auth/logout", (req, res) => {
+  res.setHeader("Set-Cookie", logout(req));
+  res.json({ ok: true });
+});
+
+app.get("/api/auth/me", (req, res) => {
+  const user = userFromRequest(req);
+  if (!user) return res.status(401).json({ error: "Sign in required" });
+  res.json({ user });
+});
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -56,13 +158,53 @@ function clientMeta(req) {
   };
 }
 
+function brokerDiligenceUrl(envelopeId, baseUrl) {
+  const broker = db
+    .prepare(
+      `SELECT p.id
+       FROM envelope_parties p
+       JOIN template_roles r ON r.id = p.role_id
+       WHERE p.envelope_id = ? AND r.role_key = 'agency'`
+    )
+    .get(envelopeId);
+  if (!broker) throw new Error("This contract has no broker");
+  const envelope = db.prepare("SELECT * FROM envelopes WHERE id = ?").get(envelopeId);
+  assertDdEditable(envelope);
+  const token = issuePartyToken(broker.id);
+  return { url: `${baseUrl}/diligence/${token.raw}` };
+}
+
+function fileNameFromRef(ref) {
+  const value = String(ref || "").replace(/^local:\/\//, "");
+  const parts = value.split(/[/\\]/);
+  return parts[parts.length - 1] || "document.pdf";
+}
+
+function sendStoredPdf(res, storageRef, filename) {
+  const ref = String(storageRef || "").replace(/^local:\/\//, "");
+  const bytes = readBytes(ref);
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", `inline; filename="${filename || fileNameFromRef(ref)}"`);
+  res.send(bytes);
+}
+
 function serializeEntity(row) {
   if (!row) return null;
+  const {
+    domain_verify_code_hash,
+    domain_verify_code_expires,
+    smtp_pass,
+    ...safe
+  } = row;
   return {
-    ...row,
+    ...safe,
     brand: parseJson(row.brand_json, {}),
     domain_verified: Boolean(row.domain_verified),
     is_active: Boolean(row.is_active),
+    smtp_configured: Boolean(smtpConfig(row)),
+    outlook_available: process.platform === "win32",
+    smtp_provider: row.smtp_provider || null,
+    ...serializeDomainVerify(row),
   };
 }
 
@@ -122,6 +264,7 @@ function getEnvelopeBundle(id) {
       appendices,
       industry: envelope.industry || brand.industry,
     },
+    due_diligence: dueDiligenceState(id),
   };
 }
 
@@ -135,8 +278,124 @@ app.get("/api/health", (_req, res) => {
   });
 });
 
+app.get("/api/directory", (req, res) => {
+  res.json(listDirectory(req.query.kind || null));
+});
+
+app.get("/api/parties", (req, res) => {
+  try {
+    res.json(listPartyRecords(req.query.kind));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post("/api/parties/:kind", (req, res) => {
+  try {
+    res.status(201).json(savePartyRecord(req.params.kind, req.body || {}));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.get("/api/parties/:id", (req, res) => {
+  try {
+    res.json(getPartyRecord(req.params.id));
+  } catch (err) {
+    res.status(404).json({ error: err.message });
+  }
+});
+
+app.patch("/api/parties/:id", (req, res) => {
+  try {
+    const existing = getPartyRecord(req.params.id);
+    res.json(savePartyRecord(existing.kind, { ...req.body, id: existing.id }));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post("/api/parties/:id/registry", async (req, res) => {
+  try {
+    res.json(await refreshPartyRegistry(req.params.id));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post("/api/parties/:id/files", upload.single("file"), (req, res) => {
+  try {
+    res.status(201).json(savePartyUpload(req.params.id, req.body?.requirementKey, req.file));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.get("/api/parties/:id/files/:fileId", (req, res) => {
+  const file = readPartyFile(req.params.id, req.params.fileId);
+  if (!file) return res.status(404).json({ error: "File not found" });
+  res.setHeader("Content-Type", file.mime || "application/octet-stream");
+  res.send(readBytes(file.storage_ref));
+});
+
+app.post("/api/envelopes/:id/dd/checks", (req, res) => {
+  try {
+    const envelope = db.prepare("SELECT * FROM envelopes WHERE id = ?").get(req.params.id);
+    if (!envelope) return res.status(404).json({ error: "Not found" });
+    assertDdEditable(envelope);
+    saveDocChecks(req.params.id, req.body?.checks || []);
+    res.json(getEnvelopeBundle(req.params.id));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.get("/api/compliance", (_req, res) => {
+  res.json(publicCompliance(getComplianceCompany()));
+});
+
+app.put("/api/compliance", (req, res) => {
+  try {
+    res.json(saveComplianceCompany(req.body || {}));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post("/api/compliance/mail/test", async (req, res) => {
+  try {
+    const result = await verifySmtp(getComplianceCompany(), req.body || {});
+    res.json(result);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post("/api/entities/:id/signatory", (req, res) => {
+  try {
+    res.status(201).json(saveBrokerSignatory(req.params.id, req.body || {}));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.get("/api/library", (_req, res) => {
+  res.json(listLibrary());
+});
+
+app.post("/api/library", (req, res) => {
+  try {
+    res.status(201).json(saveLibraryTemplate(req.body || {}));
+  } catch (err) {
+    res.status(400).json({ error: err.message || "Could not save the library template" });
+  }
+});
+
 app.get("/api/bootstrap", (req, res) => {
-  const entities = db.prepare("SELECT * FROM entities ORDER BY display_name").all().map(serializeEntity);
+  const entities = db
+    .prepare("SELECT * FROM entities WHERE is_active = 1 ORDER BY display_name")
+    .all()
+    .map(serializeEntity);
   const masterTemplate = getMasterTemplate();
   const templates = db
     .prepare("SELECT * FROM templates WHERE is_active = 1 ORDER BY is_master DESC, name")
@@ -235,8 +494,10 @@ app.get("/api/entities/:id", (req, res) => {
        ORDER BY created_at DESC LIMIT 1`
     )
     .get(entity.id);
+  if (!entity.domain_verify_token) ensureVerifyToken(entity.id);
+  const fresh = db.prepare("SELECT * FROM entities WHERE id = ?").get(entity.id);
   res.json({
-    ...entity,
+    ...serializeEntity(fresh),
     assets,
     signature_asset: signatureAsset || null,
     active_pack: {
@@ -244,6 +505,7 @@ app.get("/api/entities/:id", (req, res) => {
       back: pack.back,
       logo: pack.logo,
     },
+    verify_email: latestVerifyEmail(entity.id) || null,
   });
 });
 
@@ -256,8 +518,6 @@ app.post("/api/entities", (req, res) => {
       "company_number",
       "registered_office",
       "display_name",
-      "sending_domain",
-      "from_address",
     ];
     for (const key of required) {
       if (!body[key]) return res.status(400).json({ error: `${key} required` });
@@ -266,6 +526,10 @@ app.post("/api/entities", (req, res) => {
       return res.status(400).json({ error: "slug already exists" });
     }
     const id = newId();
+    const signature = normalizeGmailSignature(
+      body.email_signature_html || `<p>Kind regards,<br/>${body.display_name}</p>`,
+      body.email_signature_text || `Kind regards,\n${body.display_name}`
+    );
     db.prepare(
       `INSERT INTO entities (
         id, slug, legal_name, company_number, vat_number, registered_office,
@@ -288,13 +552,13 @@ app.post("/api/entities", (req, res) => {
           font: "Manrope",
         }
       ),
-      body.sending_domain,
-      body.from_address,
+      body.sending_domain || "",
+      body.from_address || "",
       body.reply_to || null,
-      body.email_signature_html || `<p>Kind regards,<br/>${body.display_name}</p>`,
-      body.email_signature_text || `Kind regards,\n${body.display_name}`,
+      signature.html,
+      signature.text,
       body.intro_email_text || "",
-      body.domain_verified === false ? 0 : 1,
+      0,
       now()
     );
     const user = db.prepare("SELECT id FROM users WHERE role = 'admin' LIMIT 1").get();
@@ -322,6 +586,10 @@ app.patch("/api/entities/:id", (req, res) => {
     ...parseJson(entity.brand_json, {}),
     ...(body.brand || {}),
   };
+  const signature = normalizeGmailSignature(
+    body.email_signature_html ?? entity.email_signature_html,
+    body.email_signature_text ?? entity.email_signature_text
+  );
   db.prepare(
     `UPDATE entities SET
       legal_name = ?,
@@ -336,7 +604,11 @@ app.patch("/api/entities/:id", (req, res) => {
       email_signature_html = ?,
       email_signature_text = ?,
       intro_email_text = ?,
-      domain_verified = ?
+      smtp_host = ?,
+      smtp_port = ?,
+      smtp_user = ?,
+      smtp_pass = ?,
+      smtp_provider = ?
      WHERE id = ?`
   ).run(
     body.legal_name ?? entity.legal_name,
@@ -348,17 +620,41 @@ app.patch("/api/entities/:id", (req, res) => {
     body.sending_domain ?? entity.sending_domain,
     body.from_address ?? entity.from_address,
     body.reply_to ?? entity.reply_to,
-    body.email_signature_html ?? entity.email_signature_html,
-    body.email_signature_text ?? entity.email_signature_text,
+    signature.html,
+    signature.text,
     body.intro_email_text !== undefined ? body.intro_email_text : entity.intro_email_text,
-    body.domain_verified === undefined
-      ? entity.domain_verified
-      : body.domain_verified
-        ? 1
-        : 0,
+    body.smtp_host !== undefined ? body.smtp_host : entity.smtp_host,
+    body.smtp_port !== undefined && body.smtp_port !== ""
+      ? Number(body.smtp_port)
+      : entity.smtp_port,
+    body.smtp_user !== undefined ? body.smtp_user : entity.smtp_user,
+    body.smtp_clear
+      ? null
+      : String(body.smtp_pass || "").trim()
+        ? String(body.smtp_pass).trim()
+        : entity.smtp_pass,
+    body.smtp_provider !== undefined ? body.smtp_provider : entity.smtp_provider,
     entity.id
   );
+  const next = db.prepare("SELECT * FROM entities WHERE id = ?").get(entity.id);
+  if (
+    String(next.sending_domain || "").toLowerCase() !==
+      String(entity.sending_domain || "").toLowerCase() ||
+    String(next.from_address || "").toLowerCase() !==
+      String(entity.from_address || "").toLowerCase()
+  ) {
+    clearVerification(entity.id);
+  }
   res.json(serializeEntity(db.prepare("SELECT * FROM entities WHERE id = ?").get(entity.id)));
+});
+
+app.post("/api/ingest-image", async (req, res) => {
+  try {
+    const dataUrl = await fetchRemoteImageDataUrl(req.body?.url);
+    res.json({ dataUrl });
+  } catch (err) {
+    res.status(400).json({ error: err.message || "Could not fetch image" });
+  }
 });
 
 app.delete("/api/entities/:id", (req, res) => {
@@ -368,6 +664,78 @@ app.delete("/api/entities/:id", (req, res) => {
   }
   db.prepare("UPDATE entities SET is_active = 0 WHERE id = ?").run(entity.id);
   res.status(204).end();
+});
+
+app.post("/api/entities/:id/verify/dns", async (req, res) => {
+  try {
+    res.json(await verifyDns(req.params.id));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post("/api/entities/:id/verify/email", async (req, res) => {
+  try {
+    const sent = await sendVerifyCode(req.params.id);
+    res.json({
+      ...sent,
+      verify_email: latestVerifyEmail(req.params.id),
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post("/api/entities/:id/verify/code", (req, res) => {
+  try {
+    res.json(confirmVerifyCode(req.params.id, req.body?.code));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post("/api/entities/:id/mail/test", async (req, res) => {
+  const entity = db
+    .prepare("SELECT * FROM entities WHERE id = ? AND is_active = 1")
+    .get(req.params.id);
+  if (!entity) return res.status(404).json({ error: "Not found" });
+  try {
+    res.json(await verifySmtp(entity, req.body || {}));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post("/api/entities/:id/mail/test-send", async (req, res) => {
+  const entity = db
+    .prepare("SELECT * FROM entities WHERE id = ? AND is_active = 1")
+    .get(req.params.id);
+  if (!entity) return res.status(404).json({ error: "Not found" });
+  try {
+    const merged = { ...entity, ...(req.body || {}) };
+    if (!String(req.body?.smtp_pass || "").trim()) merged.smtp_pass = entity.smtp_pass;
+    const to = merged.from_address || entity.from_address;
+    const delivery = await deliverMail({
+      entity: merged,
+      to,
+      subject: `Attest mail test for ${entity.display_name}`,
+      text: "This is a test from Attest. If you received it, this company can send from this mailbox.",
+      html: "<p>This is a test from Attest. If you received it, this company can send from this mailbox.</p>",
+      allowOutlook: false,
+    });
+    res.json({ sent: true, to, via: delivery.via });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post("/api/entities/:id/mail/disconnect", (req, res) => {
+  const entity = db
+    .prepare("SELECT * FROM entities WHERE id = ? AND is_active = 1")
+    .get(req.params.id);
+  if (!entity) return res.status(404).json({ error: "Not found" });
+  db.prepare("UPDATE entities SET smtp_pass = NULL WHERE id = ?").run(entity.id);
+  res.json(serializeEntity(db.prepare("SELECT * FROM entities WHERE id = ?").get(entity.id)));
 });
 
 app.post("/api/entities/:id/assets", upload.single("file"), (req, res) => {
@@ -399,7 +767,7 @@ app.post("/api/entities/:id/assets", upload.single("file"), (req, res) => {
       kind,
       req.body.name || req.file.originalname,
       stored.storageRef,
-      req.file.mimetype,
+      assetMime(req.file),
       req.body.page_size || "A4",
       now()
     );
@@ -415,6 +783,28 @@ app.post("/api/entities/:id/assets", upload.single("file"), (req, res) => {
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
+});
+
+app.delete("/api/entities/:id/assets/:assetId", (req, res) => {
+  const asset = db
+    .prepare("SELECT * FROM entity_assets WHERE id = ? AND entity_id = ?")
+    .get(req.params.assetId, req.params.id);
+  if (!asset || !asset.is_active) {
+    return res.status(404).json({ error: "Not found" });
+  }
+  db.prepare("UPDATE entity_assets SET is_active = 0 WHERE id = ?").run(asset.id);
+  if (asset.kind === "logo") {
+    const entity = db.prepare("SELECT * FROM entities WHERE id = ?").get(asset.entity_id);
+    const brand = parseJson(entity?.brand_json, {});
+    if (brand.logo_asset_id === asset.id) {
+      brand.logo_asset_id = null;
+      db.prepare("UPDATE entities SET brand_json = ? WHERE id = ?").run(
+        JSON.stringify(brand),
+        asset.entity_id
+      );
+    }
+  }
+  res.status(204).end();
 });
 
 app.get("/api/entities/:id/assets/:assetId/file", (req, res) => {
@@ -446,12 +836,12 @@ app.get("/api/templates", (_req, res) => {
 
 app.get("/api/templates/master", (_req, res) => {
   const t = getMasterTemplate();
-  if (!t) return res.status(404).json({ error: "Master contract not found" });
+  if (!t) return res.json(null);
   const roles = db
     .prepare("SELECT * FROM template_roles WHERE template_id = ? ORDER BY signing_order")
     .all(t.id);
   const fields = db.prepare("SELECT * FROM template_fields WHERE template_id = ?").all(t.id);
-  res.json({ ...t, is_master: true, roles, fields });
+  res.json({ ...t, is_master: true, roles, fields, file_name: fileNameFromRef(t.source_url) });
 });
 
 app.patch("/api/templates/master", (req, res) => {
@@ -467,9 +857,9 @@ app.patch("/api/templates/master", (req, res) => {
   res.json(db.prepare("SELECT * FROM templates WHERE id = ?").get(t.id));
 });
 
-app.post("/api/templates/master/file", upload.single("file"), (req, res) => {
+app.post("/api/templates/master/file", upload.single("file"), async (req, res) => {
   try {
-    let t = getMasterTemplate();
+    let t = getMasterTemplate({ includeInactive: true });
     if (!req.file) return res.status(400).json({ error: "PDF file required" });
     const stored = writeBytes(
       "uploads",
@@ -492,9 +882,10 @@ app.post("/api/templates/master/file", upload.single("file"), (req, res) => {
       );
       // roles added lazily if missing — seed helper not imported; create minimal roles
       const roleDefs = [
-        ["company", "Company", 1, 1],
-        ["agency", "Agency", 2, 0],
-        ["supplier", "Supplier", 3, 0],
+        ["supplier", "Contractor", 1, 1],
+        ["spv", "Supplier (SPV)", 2, 1],
+        ["agency", "Broker", 3, 0],
+        ["company", "Client", 4, 1],
       ];
       const roleIds = {};
       for (const [key, label, order, evidence] of roleDefs) {
@@ -506,32 +897,41 @@ app.post("/api/templates/master/file", upload.single("file"), (req, res) => {
           ) VALUES (?, ?, ?, ?, ?, ?)`
         ).run(rid, id, key, label, order, evidence);
       }
-      for (const [role, key, label, type, x, y, w, h] of [
-        ["company", "company_sig", "Company signature", "signature", 50, 190, 180, 36],
-        ["company", "company_date", "Date", "date", 250, 198, 120, 20],
-        ["agency", "agency_sig", "Agency signature", "signature", 50, 120, 180, 36],
-        ["supplier", "supplier_sig", "Supplier signature", "signature", 50, 50, 180, 36],
-      ]) {
-        db.prepare(
-          `INSERT INTO template_fields (
-            id, template_id, role_id, field_key, label, field_type, required,
-            page, x, y, w, h, validation_json
-          ) VALUES (?, ?, ?, ?, ?, ?, 1, 0, ?, ?, ?, ?, NULL)`
-        ).run(newId(), id, roleIds[role], key, label, type, x, y, w, h);
-      }
+      ensureSigningEvidence();
+      await applyMasterPdfFields(id, req.file.buffer, { isNew: true });
       t = db.prepare("SELECT * FROM templates WHERE id = ?").get(id);
     } else {
-      db.prepare("UPDATE templates SET source_url = ?, name = COALESCE(?, name) WHERE id = ?").run(
-        `local://${stored.storageRef}`,
-        req.body.name || null,
-        t.id
-      );
+      db.prepare(
+        "UPDATE templates SET source_url = ?, name = COALESCE(?, name), is_active = 1, is_master = 1 WHERE id = ?"
+      ).run(`local://${stored.storageRef}`, req.body.name || null, t.id);
+      await applyMasterPdfFields(t.id, req.file.buffer, { isNew: false });
       t = db.prepare("SELECT * FROM templates WHERE id = ?").get(t.id);
     }
-    res.json(t);
+    const roles = db
+      .prepare("SELECT * FROM template_roles WHERE template_id = ? ORDER BY signing_order")
+      .all(t.id);
+    const fields = db.prepare("SELECT * FROM template_fields WHERE template_id = ?").all(t.id);
+    res.json({ ...t, is_master: true, roles, fields, file_name: fileNameFromRef(t.source_url) });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
+});
+
+app.get("/api/templates/master/file", (_req, res) => {
+  const t = getMasterTemplate();
+  if (!t) return res.status(404).json({ error: "Master contract not found" });
+  try {
+    sendStoredPdf(res, t.source_url, fileNameFromRef(t.source_url));
+  } catch (err) {
+    res.status(404).json({ error: err.message });
+  }
+});
+
+app.delete("/api/templates/master", (_req, res) => {
+  const t = getMasterTemplate();
+  if (!t) return res.status(404).json({ error: "Master contract not found" });
+  db.prepare("UPDATE templates SET is_active = 0 WHERE id = ?").run(t.id);
+  res.status(204).end();
 });
 
 app.get("/api/templates/:id", (req, res) => {
@@ -559,10 +959,20 @@ app.get("/api/templates/:id", (req, res) => {
 
 app.get("/api/appendices", (req, res) => {
   const industry = req.query.industry || null;
-  res.json(listAppendices({ industry: industry || undefined }));
+  res.json(
+    listAppendices({ industry: industry || undefined }).map((row) => {
+      const fields = listAppendixFields(row.id);
+      return {
+        ...row,
+        fields,
+        needs_signing: fields.length > 0,
+        file_name: fileNameFromRef(row.storage_ref),
+      };
+    })
+  );
 });
 
-app.post("/api/appendices", upload.single("file"), (req, res) => {
+app.post("/api/appendices", upload.single("file"), async (req, res) => {
   try {
     const name = req.body.name;
     const industry = req.body.industry;
@@ -588,7 +998,10 @@ app.post("/api/appendices", upload.single("file"), (req, res) => {
       stored.storageRef,
       now()
     );
-    res.status(201).json(db.prepare("SELECT * FROM appendices WHERE id = ?").get(id));
+    await applyAppendixPdfFields(id, req.file.buffer);
+    const row = db.prepare("SELECT * FROM appendices WHERE id = ?").get(id);
+    const fields = listAppendixFields(id);
+    res.status(201).json({ ...row, fields, needs_signing: fields.length > 0 });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
@@ -615,7 +1028,7 @@ app.patch("/api/appendices/:id", (req, res) => {
   res.json(db.prepare("SELECT * FROM appendices WHERE id = ?").get(row.id));
 });
 
-app.post("/api/appendices/:id/file", upload.single("file"), (req, res) => {
+app.post("/api/appendices/:id/file", upload.single("file"), async (req, res) => {
   try {
     const row = db.prepare("SELECT * FROM appendices WHERE id = ?").get(req.params.id);
     if (!row) return res.status(404).json({ error: "Not found" });
@@ -629,10 +1042,30 @@ app.post("/api/appendices/:id/file", upload.single("file"), (req, res) => {
       stored.storageRef,
       row.id
     );
-    res.json(db.prepare("SELECT * FROM appendices WHERE id = ?").get(row.id));
+    await applyAppendixPdfFields(row.id, req.file.buffer);
+    const updated = db.prepare("SELECT * FROM appendices WHERE id = ?").get(row.id);
+    const fields = listAppendixFields(row.id);
+    res.json({ ...updated, fields, needs_signing: fields.length > 0 });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
+});
+
+app.get("/api/appendices/:id/file", (req, res) => {
+  const row = db.prepare("SELECT * FROM appendices WHERE id = ? AND is_active = 1").get(req.params.id);
+  if (!row) return res.status(404).json({ error: "Not found" });
+  try {
+    sendStoredPdf(res, row.storage_ref, fileNameFromRef(row.storage_ref));
+  } catch (err) {
+    res.status(404).json({ error: err.message });
+  }
+});
+
+app.delete("/api/appendices/:id", (req, res) => {
+  const row = db.prepare("SELECT * FROM appendices WHERE id = ? AND is_active = 1").get(req.params.id);
+  if (!row) return res.status(404).json({ error: "Not found" });
+  db.prepare("UPDATE appendices SET is_active = 0 WHERE id = ?").run(row.id);
+  res.status(204).end();
 });
 
 app.get("/api/envelopes", (_req, res) => {
@@ -657,7 +1090,7 @@ app.get("/api/envelopes/:id", (req, res) => {
 
 app.post("/api/envelopes", (req, res) => {
   try {
-    const {
+    let {
       entityId,
       title,
       preparedOn,
@@ -667,14 +1100,19 @@ app.post("/api/envelopes", (req, res) => {
       parties,
       reminderFrequency = "none",
     } = req.body || {};
+    let template = getMasterTemplate();
+    let shape = req.body?.shape === "four" ? "four" : "three";
+    if (req.body?.libraryId) {
+      const built = contractFromLibrary(req.body);
+      entityId = built.entityId;
+      parties = built.parties;
+      shape = built.shape;
+      template = db.prepare("SELECT * FROM templates WHERE id = ?").get(built.templateId);
+    }
     const entity = db
       .prepare("SELECT * FROM entities WHERE id = ? AND is_active = 1")
       .get(entityId);
     if (!entity) return res.status(400).json({ error: "Unknown entity" });
-    if (!entity.domain_verified) {
-      return res.status(400).json({ error: "Entity domain_verified = false; cannot create contract" });
-    }
-    const template = getMasterTemplate();
     if (!template) return res.status(400).json({ error: "Master contract is not configured" });
     if (!preparedOn || !/^\d{4}-\d{2}-\d{2}$/.test(preparedOn)) {
       return res.status(400).json({ error: "preparedOn (YYYY-MM-DD) is required" });
@@ -697,14 +1135,23 @@ app.post("/api/envelopes", (req, res) => {
       industry: selectedIndustry,
       appendixIds: requestedAppendixIds,
     });
+    const wanted = SIGN_ORDER.filter((key) => shape === "four" || key !== "spv");
     const roles = db
       .prepare("SELECT * FROM template_roles WHERE template_id = ? ORDER BY signing_order")
       .all(template.id);
-    if (roles.length !== 3) {
-      return res.status(400).json({ error: "Master contract must define company/agency/supplier roles" });
+    const roleByKey = Object.fromEntries(roles.map((role) => [role.role_key, role]));
+    for (const key of wanted) {
+      if (!roleByKey[key]) {
+        return res.status(400).json({ error: `Master contract is missing the ${key} role` });
+      }
     }
-    if (!Array.isArray(parties) || parties.length !== 3) {
-      return res.status(400).json({ error: "Provide exactly three parties" });
+    if (!Array.isArray(parties) || parties.length !== wanted.length) {
+      return res.status(400).json({
+        error:
+          shape === "four"
+            ? "A 4-way contract needs the contractor, supplier, broker and client"
+            : "A 3-way contract needs the contractor, broker and client",
+      });
     }
 
     const user = db.prepare("SELECT id FROM users WHERE role = 'admin' LIMIT 1").get();
@@ -713,8 +1160,8 @@ app.post("/api/envelopes", (req, res) => {
       `INSERT INTO envelopes (
         id, entity_id, template_id, status, signing_mode, reminder_frequency, max_auto_reminders,
         external_client_ref, title, prepared_on, industry, front_cover_id, back_cover_id,
-        logo_asset_id, appendix_ids_json, created_by, created_at
-      ) VALUES (?, ?, ?, 'draft', 'sequential', ?, 5, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        logo_asset_id, appendix_ids_json, created_by, created_at, party_shape, is_sample
+      ) VALUES (?, ?, ?, 'draft', 'sequential', ?, 5, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       envelopeId,
       entityId,
@@ -729,29 +1176,42 @@ app.post("/api/envelopes", (req, res) => {
       brand.logo?.id || null,
       JSON.stringify(selectedAppendices.map((a) => a.id)),
       user?.id || null,
-      now()
+      now(),
+      shape,
+      parties.some((party) => party.is_sample) ? 1 : 0
     );
 
-    for (const role of roles) {
+    wanted.forEach((key, index) => {
+      const role = roleByKey[key];
       const incoming = parties.find((p) => p.roleKey === role.role_key);
       if (!incoming?.signer_name || !incoming?.signer_email || !incoming?.company_name) {
-        throw new Error(`Missing party details for role ${role.role_key}`);
+        throw new Error(`Missing party details for ${role.label || role.role_key}`);
+      }
+      if (!["director", "authorised_signatory"].includes(incoming.signer_role)) {
+        throw new Error(
+          `${role.label || role.role_key} needs a role: director, or authorised signatory`
+        );
       }
       db.prepare(
         `INSERT INTO envelope_parties (
-          id, envelope_id, role_id, company_name, signer_name, signer_email,
-          status, order_index
-        ) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)`
+          id, envelope_id, role_id, company_name, company_number, directory_party_id,
+          signer_name, signer_email, signer_role,
+          status, order_index, is_sample
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`
       ).run(
         newId(),
         envelopeId,
         role.id,
         incoming.company_name,
+        incoming.company_number || "",
+        incoming.directory_party_id || null,
         incoming.signer_name,
         incoming.signer_email,
-        role.signing_order
+        incoming.signer_role,
+        index + 1,
+        incoming.is_sample ? 1 : 0
       );
-    }
+    });
 
     appendEvent({
       envelopeId,
@@ -766,6 +1226,7 @@ app.post("/api/envelopes", (req, res) => {
         auto_back_cover_id: brand.back?.id || null,
         auto_logo_asset_id: brand.logo?.id || null,
         appendix_ids: selectedAppendices.map((a) => a.id),
+        party_shape: shape,
       },
     });
 
@@ -840,9 +1301,7 @@ app.get("/api/sign/:token", (req, res) => {
   const party = db.prepare("SELECT * FROM envelope_parties WHERE id = ?").get(token.party_id);
   const envelope = getEnvelopeBundle(token.envelope_id);
   const role = db.prepare("SELECT * FROM template_roles WHERE id = ?").get(party.role_id);
-  const fields = db
-    .prepare("SELECT * FROM template_fields WHERE role_id = ?")
-    .all(party.role_id);
+  const fields = fieldsForParty(token.envelope_id, party.role_id);
   const values = db
     .prepare("SELECT * FROM field_values WHERE envelope_id = ? AND party_id = ?")
     .all(token.envelope_id, party.id);
@@ -881,7 +1340,7 @@ app.post("/api/sign/:token/fields", (req, res) => {
     const token = resolveToken(req.params.token);
     if (!token) return res.status(401).json({ error: "Invalid or expired token" });
     const { fieldId, value } = req.body || {};
-    const field = db.prepare("SELECT * FROM template_fields WHERE id = ?").get(fieldId);
+    const field = getSignField(token.envelope_id, fieldId, token.role_id);
     if (!field) return res.status(400).json({ error: "Unknown field" });
     if (field.role_id !== token.role_id) {
       return res.status(403).json({ error: "Field not owned by this role" });
@@ -933,7 +1392,7 @@ app.post("/api/sign/:token/evidence", upload.single("file"), (req, res) => {
   try {
     const token = resolveToken(req.params.token);
     if (!token) return res.status(401).json({ error: "Invalid or expired token" });
-    const requirementId = req.body.requirementId;
+    const requirementId = String(req.body?.requirementId || "");
     const reqRow = db
       .prepare("SELECT * FROM evidence_requirements WHERE id = ?")
       .get(requirementId);
@@ -945,17 +1404,22 @@ app.post("/api/sign/:token/evidence", upload.single("file"), (req, res) => {
     if (req.file.size > (reqRow.max_size_bytes || 10 * 1024 * 1024)) {
       return res.status(400).json({ error: "File too large" });
     }
-    const accepted = JSON.parse(reqRow.accepted_mimes || "[]");
-    if (accepted.length && !accepted.includes(req.file.mimetype)) {
-      return res.status(400).json({ error: `MIME not accepted: ${req.file.mimetype}` });
-    }
-    // Basic magic-byte check for PDF / JPEG / PNG
     const buf = req.file.buffer;
     const isPdf = buf.slice(0, 5).toString() === "%PDF-";
     const isJpeg = buf[0] === 0xff && buf[1] === 0xd8;
     const isPng = buf.slice(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
     if (!(isPdf || isJpeg || isPng)) {
       return res.status(400).json({ error: "File content does not match PDF/JPEG/PNG" });
+    }
+    const mime = String(req.file.mimetype || "").toLowerCase();
+    const accepted = JSON.parse(reqRow.accepted_mimes || "[]");
+    if (
+      accepted.length &&
+      mime &&
+      mime !== "application/octet-stream" &&
+      !accepted.includes(mime)
+    ) {
+      return res.status(400).json({ error: `MIME not accepted: ${req.file.mimetype}` });
     }
 
     const stored = writeBytes(
@@ -996,6 +1460,7 @@ app.post("/api/sign/:token/evidence", upload.single("file"), (req, res) => {
         requirement_key: reqRow.requirement_key,
         evidence_file_id: id,
         file_hash: stored.sha256,
+        original_name: req.file.originalname,
       },
       ip,
     });
@@ -1071,6 +1536,213 @@ app.post("/api/sign/:token/decline", (req, res) => {
 });
 
 // Dev helper: mint a fresh link for a party (staff)
+app.post("/api/envelopes/:id/dd/files", upload.single("file"), (req, res) => {
+  try {
+    const state = saveDueDiligenceFile(req.params.id, {
+      roleKey: req.body?.roleKey,
+      requirementKey: req.body?.requirementKey,
+      nameChangeId: req.body?.nameChangeId || null,
+      file: req.file,
+    });
+    res.status(201).json(state);
+  } catch (err) {
+    res.status(400).json({ error: err.message || "Upload failed" });
+  }
+});
+
+app.post("/api/envelopes/:id/dd/name-changes", (req, res) => {
+  try {
+    res.status(201).json(
+      addNameChange(req.params.id, {
+        roleKey: req.body?.roleKey,
+        previousName: req.body?.previousName,
+        newName: req.body?.newName,
+      })
+    );
+  } catch (err) {
+    res.status(400).json({ error: err.message || "Could not add name change" });
+  }
+});
+
+app.delete("/api/envelopes/:id/dd/name-changes/:changeId", (req, res) => {
+  try {
+    res.json(removeNameChange(req.params.id, req.params.changeId));
+  } catch (err) {
+    res.status(400).json({ error: err.message || "Could not remove name change" });
+  }
+});
+
+app.post("/api/envelopes/:id/dd/office-changed", (req, res) => {
+  try {
+    res.json(setOfficeChanged(req.params.id, Boolean(req.body?.enabled)));
+  } catch (err) {
+    res.status(400).json({ error: err.message || "Could not update registered office" });
+  }
+});
+
+app.post("/api/envelopes/:id/dd/compile", async (req, res) => {
+  try {
+    const state = await compileDueDiligence(req.params.id, "staff");
+    res.json(state);
+  } catch (err) {
+    res.status(400).json({ error: err.message || "Could not compile the due diligence pack" });
+  }
+});
+
+app.post("/api/envelopes/:id/dd/sign-link", (req, res) => {
+  try {
+    const state = dueDiligenceState(req.params.id);
+    if (!state.hasFile) throw new Error("Compile the due diligence pack before signing it");
+    if (state.validatedAt) throw new Error("The broker has already signed this pack");
+    res.json(brokerDiligenceUrl(req.params.id, publicBase(req)));
+  } catch (err) {
+    res.status(400).json({ error: err.message || "Could not open the pack for signing" });
+  }
+});
+
+app.get("/api/envelopes/:id/due-diligence", (req, res) => {
+  const bytes = readDueDiligence(req.params.id);
+  if (!bytes) return res.status(404).json({ error: "Due diligence pack has not been compiled" });
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", 'inline; filename="due-diligence.pdf"');
+  res.send(bytes);
+});
+
+function requireDiligenceToken(req, res) {
+  const token = resolveToken(req.params.token);
+  if (!token) {
+    res.status(401).json({ error: "Invalid or expired link" });
+    return null;
+  }
+  return token;
+}
+
+app.get("/api/diligence/:token", (req, res) => {
+  try {
+    const token = requireDiligenceToken(req, res);
+    if (!token) return;
+    res.json(diligenceSession(token.party_id));
+  } catch (err) {
+    res.status(400).json({ error: err.message || "Could not open this page" });
+  }
+});
+
+app.post("/api/diligence/:token/files", upload.single("file"), (req, res) => {
+  try {
+    const token = requireDiligenceToken(req, res);
+    if (!token) return;
+    const role = db.prepare("SELECT * FROM template_roles WHERE id = ?").get(token.role_id);
+    saveDueDiligenceFile(token.envelope_id, {
+      roleKey: role.role_key,
+      requirementKey: req.body?.requirementKey,
+      nameChangeId: req.body?.nameChangeId || null,
+      file: req.file,
+      partyId: token.party_id,
+    });
+    res.status(201).json(diligenceSession(token.party_id));
+  } catch (err) {
+    res.status(400).json({ error: err.message || "Upload failed" });
+  }
+});
+
+app.post("/api/diligence/:token/name-changes", (req, res) => {
+  try {
+    const token = requireDiligenceToken(req, res);
+    if (!token) return;
+    const role = db.prepare("SELECT * FROM template_roles WHERE id = ?").get(token.role_id);
+    addNameChange(token.envelope_id, {
+      roleKey: role.role_key,
+      previousName: req.body?.previousName,
+      newName: req.body?.newName,
+      partyId: token.party_id,
+    });
+    res.status(201).json(diligenceSession(token.party_id));
+  } catch (err) {
+    res.status(400).json({ error: err.message || "Could not add name change" });
+  }
+});
+
+app.delete("/api/diligence/:token/name-changes/:changeId", (req, res) => {
+  try {
+    const token = requireDiligenceToken(req, res);
+    if (!token) return;
+    const role = db.prepare("SELECT * FROM template_roles WHERE id = ?").get(token.role_id);
+    const change = db
+      .prepare("SELECT * FROM company_name_changes WHERE id = ? AND envelope_id = ?")
+      .get(req.params.changeId, token.envelope_id);
+    if (!change || change.role_key !== role.role_key) {
+      return res.status(404).json({ error: "Name change not found" });
+    }
+    removeNameChange(token.envelope_id, req.params.changeId);
+    res.json(diligenceSession(token.party_id));
+  } catch (err) {
+    res.status(400).json({ error: err.message || "Could not remove name change" });
+  }
+});
+
+app.post("/api/diligence/:token/office-changed", (req, res) => {
+  try {
+    const token = requireDiligenceToken(req, res);
+    if (!token) return;
+    const role = db.prepare("SELECT * FROM template_roles WHERE id = ?").get(token.role_id);
+    if (role.role_key !== "supplier") {
+      return res.status(403).json({ error: "Only the contractor records a registered-office change" });
+    }
+    setOfficeChanged(token.envelope_id, Boolean(req.body?.enabled));
+    res.json(diligenceSession(token.party_id));
+  } catch (err) {
+    res.status(400).json({ error: err.message || "Could not update registered office" });
+  }
+});
+
+app.post("/api/diligence/:token/submit", async (req, res) => {
+  try {
+    const token = requireDiligenceToken(req, res);
+    if (!token) return;
+    const role = db.prepare("SELECT * FROM template_roles WHERE id = ?").get(token.role_id);
+    submitDueDiligence(token.envelope_id, role.role_key, token.party_id);
+    res.json(diligenceSession(token.party_id));
+  } catch (err) {
+    res.status(400).json({ error: err.message || "Could not submit documents" });
+  }
+});
+
+app.get("/api/diligence/:token/pack", (req, res) => {
+  try {
+    const token = requireDiligenceToken(req, res);
+    if (!token) return;
+    const role = db.prepare("SELECT * FROM template_roles WHERE id = ?").get(token.role_id);
+    if (role.role_key !== "agency") {
+      return res.status(403).json({ error: "Only the broker can open the compiled pack" });
+    }
+    const bytes = readDueDiligence(token.envelope_id);
+    if (!bytes) return res.status(404).json({ error: "The due diligence pack is not ready yet" });
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", 'inline; filename="due-diligence.pdf"');
+    res.send(bytes);
+  } catch (err) {
+    res.status(400).json({ error: err.message || "Could not open the pack" });
+  }
+});
+
+app.post("/api/diligence/:token/sign", async (req, res) => {
+  try {
+    const token = requireDiligenceToken(req, res);
+    if (!token) return;
+    const { ip, userAgent } = clientMeta(req);
+    await signDueDiligence(token.envelope_id, {
+      partyId: token.party_id,
+      signatureDataUrl: req.body?.signatureDataUrl,
+      typedName: req.body?.typedName,
+      ip,
+      userAgent,
+    });
+    res.json(diligenceSession(token.party_id));
+  } catch (err) {
+    res.status(400).json({ error: err.message || "Could not sign the pack" });
+  }
+});
+
 app.post("/api/envelopes/:id/parties/:partyId/link", (req, res) => {
   try {
     const result = inviteParty(req.params.id, req.params.partyId, {

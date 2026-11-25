@@ -1,7 +1,10 @@
 const base = "";
 
 async function request(path, options = {}) {
-  const res = await fetch(`${base}${path}`, options);
+  const res = await fetch(`${base}${path}`, { credentials: "include", ...options });
+  if (res.status === 401 && !path.startsWith("/api/auth/")) {
+    window.dispatchEvent(new Event("attest-signed-out"));
+  }
   if (!res.ok) {
     let message = `Request failed (${res.status})`;
     try {
@@ -18,6 +21,70 @@ async function request(path, options = {}) {
 
 export const api = {
   health: () => request("/api/health"),
+  me: () => request("/api/auth/me"),
+  login: (email, password) =>
+    request("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password }),
+    }),
+  logout: () => request("/api/auth/logout", { method: "POST" }),
+  library: () => request("/api/library"),
+  saveLibrary: (body) =>
+    request("/api/library", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  compliance: () => request("/api/compliance"),
+  saveCompliance: (body) =>
+    request("/api/compliance", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  testComplianceMail: (body) =>
+    request("/api/compliance/mail/test", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  directory: (kind) =>
+    request(`/api/directory${kind ? `?kind=${encodeURIComponent(kind)}` : ""}`),
+  parties: (kind) => request(`/api/parties?kind=${encodeURIComponent(kind)}`),
+  party: (id) => request(`/api/parties/${id}`),
+  saveParty: (kind, body) =>
+    request(`/api/parties/${kind}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  updateParty: (id, body) =>
+    request(`/api/parties/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  fetchPartyRegistry: (id) => request(`/api/parties/${id}/registry`, { method: "POST" }),
+  uploadPartyFile: (id, requirementKey, file) => {
+    const body = new FormData();
+    body.append("requirementKey", requirementKey);
+    body.append("file", file);
+    return request(`/api/parties/${id}/files`, { method: "POST", body });
+  },
+  partyFileUrl: (id, fileId) => `/api/parties/${id}/files/${fileId}`,
+  saveDueDiligenceChecks: (id, checks) =>
+    request(`/api/envelopes/${id}/dd/checks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ checks }),
+    }),
+  saveBrokerSignatory: (entityId, body) =>
+    request(`/api/entities/${entityId}/signatory`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
   bootstrap: () => request("/api/bootstrap"),
   listEntities: () => request("/api/entities"),
   getEntity: (id) => request(`/api/entities/${id}`),
@@ -34,6 +101,14 @@ export const api = {
       body: JSON.stringify(body),
     }),
   deleteEntity: (id) => request(`/api/entities/${id}`, { method: "DELETE" }),
+  deleteEntityAsset: (entityId, assetId) =>
+    request(`/api/entities/${entityId}/assets/${assetId}`, { method: "DELETE" }),
+  ingestImage: (url) =>
+    request("/api/ingest-image", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url }),
+    }),
   uploadEntityAsset: (id, kind, file, name) => {
     const body = new FormData();
     body.append("kind", kind);
@@ -80,6 +155,34 @@ export const api = {
     body.append("file", file);
     return request(`/api/appendices/${id}/file`, { method: "POST", body });
   },
+  deleteAppendix: (id) => request(`/api/appendices/${id}`, { method: "DELETE" }),
+  deleteMasterTemplate: () => request("/api/templates/master", { method: "DELETE" }),
+  masterFileUrl: () => "/api/templates/master/file",
+  appendixFileUrl: (id) => `/api/appendices/${id}/file`,
+  verifyDomainDns: (id) =>
+    request(`/api/entities/${id}/verify/dns`, { method: "POST" }),
+  sendDomainVerifyEmail: (id) =>
+    request(`/api/entities/${id}/verify/email`, { method: "POST" }),
+  confirmDomainVerifyCode: (id, code) =>
+    request(`/api/entities/${id}/verify/code`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code }),
+    }),
+  testCompanyMail: (id, body = {}) =>
+    request(`/api/entities/${id}/mail/test`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  sendCompanyMailTest: (id, body = {}) =>
+    request(`/api/entities/${id}/mail/test-send`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  disconnectCompanyMail: (id) =>
+    request(`/api/entities/${id}/mail/disconnect`, { method: "POST" }),
   listEnvelopes: () => request("/api/envelopes"),
   getEnvelope: (id) => request(`/api/envelopes/${id}`),
   createEnvelope: (body) =>
@@ -133,6 +236,64 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ reason }),
     }),
+  uploadDueDiligence: (id, { roleKey, requirementKey, nameChangeId, file }) => {
+    const body = new FormData();
+    body.append("roleKey", roleKey);
+    body.append("requirementKey", requirementKey || "");
+    if (nameChangeId) body.append("nameChangeId", nameChangeId);
+    body.append("file", file);
+    return request(`/api/envelopes/${id}/dd/files`, { method: "POST", body });
+  },
+  addNameChange: (id, body) =>
+    request(`/api/envelopes/${id}/dd/name-changes`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  removeNameChange: (id, changeId) =>
+    request(`/api/envelopes/${id}/dd/name-changes/${changeId}`, { method: "DELETE" }),
+  setOfficeChanged: (id, enabled) =>
+    request(`/api/envelopes/${id}/dd/office-changed`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled }),
+    }),
+  dueDiligenceSignLink: (id) =>
+    request(`/api/envelopes/${id}/dd/sign-link`, { method: "POST" }),
+  compileDueDiligence: (id) =>
+    request(`/api/envelopes/${id}/dd/compile`, { method: "POST" }),
+  dueDiligenceUrl: (id) => `/api/envelopes/${id}/due-diligence`,
+  diligenceSession: (token) => request(`/api/diligence/${token}`),
+  uploadPartyDiligence: (token, { requirementKey, nameChangeId, file }) => {
+    const body = new FormData();
+    body.append("requirementKey", requirementKey || "");
+    if (nameChangeId) body.append("nameChangeId", nameChangeId);
+    body.append("file", file);
+    return request(`/api/diligence/${token}/files`, { method: "POST", body });
+  },
+  addPartyNameChange: (token, body) =>
+    request(`/api/diligence/${token}/name-changes`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  removePartyNameChange: (token, changeId) =>
+    request(`/api/diligence/${token}/name-changes/${changeId}`, { method: "DELETE" }),
+  setPartyOfficeChanged: (token, enabled) =>
+    request(`/api/diligence/${token}/office-changed`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled }),
+    }),
+  submitDiligence: (token) =>
+    request(`/api/diligence/${token}/submit`, { method: "POST" }),
+  signDiligence: (token, payload) =>
+    request(`/api/diligence/${token}/sign`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }),
+  diligencePackUrl: (token) => `/api/diligence/${token}/pack`,
   documentUrl: (id, kind) => `/api/envelopes/${id}/documents/${kind}`,
   entityAssetUrl: (entityId, assetId) => `/api/entities/${entityId}/assets/${assetId}/file`,
 };

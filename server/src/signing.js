@@ -1,9 +1,13 @@
 import { createHash, randomBytes } from "node:crypto";
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import { db, newId, now, sha256 } from "./db.js";
-import { appendEvent } from "./events.js";
+import { appendEvent, verifyEventChain } from "./events.js";
 import { sendTemplatedEmail } from "./mail.js";
 import { readBytes, writeBytes, writeBase64Png } from "./storage.js";
+import { envelopePlacedFields, fieldsForParty } from "./documentFields.js";
+import { buildAuditCertificate } from "./auditCertificate.js";
+import { FINAL_EVIDENCE } from "./parties.js";
+import { assertClientMayBeInvited, assertContractMayBeIssued } from "./dueDiligence.js";
 
 const CONSENT_TEXT =
   "I agree to sign this document electronically. I understand that my electronic signature is as legally binding as a handwritten signature.";
@@ -60,17 +64,21 @@ export function getActionableParty(envelopeId) {
 export function evidenceChecklist(partyId) {
   const party = db.prepare("SELECT * FROM envelope_parties WHERE id = ?").get(partyId);
   const role = db.prepare("SELECT * FROM template_roles WHERE id = ?").get(party.role_id);
+  const allowed = new Set((FINAL_EVIDENCE[role.role_key] || []).map(([key]) => key));
   const requirements = db
-    .prepare("SELECT * FROM evidence_requirements WHERE role_id = ?")
-    .all(party.role_id);
-  return requirements.map((req) => {
-    const file = db
+    .prepare("SELECT * FROM evidence_requirements WHERE role_id = ? AND is_required = 1")
+    .all(party.role_id)
+    .filter((req) => allowed.has(req.requirement_key));
+  const mapped = requirements.map((req) => {
+    const files = db
       .prepare(
-        `SELECT * FROM evidence_files
+        `SELECT id, original_name, mime, uploaded_at, review_status
+         FROM evidence_files
          WHERE party_id = ? AND requirement_id = ? AND deleted_at IS NULL
-         ORDER BY uploaded_at DESC LIMIT 1`
+         ORDER BY uploaded_at DESC`
       )
-      .get(partyId, req.id);
+      .all(partyId, req.id);
+    const file = files[0] || null;
     const verification = db
       .prepare(
         `SELECT * FROM verification_results
@@ -79,17 +87,20 @@ export function evidenceChecklist(partyId) {
       )
       .get(partyId, req.id);
     const satisfied =
-      (file && ["uploaded", "accepted"].includes(file.review_status)) ||
+      files.some((f) => ["uploaded", "accepted"].includes(f.review_status)) ||
       verification?.result === "verified";
     return {
       ...req,
       accepted_mimes: JSON.parse(req.accepted_mimes || "[]"),
-      file: file || null,
+      files,
+      file,
       verification: verification || null,
       satisfied: Boolean(satisfied),
+      allow_multiple: false,
       evidence_required: Boolean(role.evidence_required),
     };
   });
+  return mapped;
 }
 
 export function evidenceGateOpen(partyId) {
@@ -106,6 +117,7 @@ export function inviteParty(envelopeId, partyId, { baseUrl, actor = "system" } =
   const entity = db.prepare("SELECT * FROM entities WHERE id = ?").get(envelope.entity_id);
   const party = db.prepare("SELECT * FROM envelope_parties WHERE id = ?").get(partyId);
   const role = db.prepare("SELECT * FROM template_roles WHERE id = ?").get(party.role_id);
+  if (role.role_key === "company") assertClientMayBeInvited(envelopeId);
   const token = issuePartyToken(partyId);
   const signingLink = `${baseUrl}/sign/${token.raw}`;
 
@@ -139,6 +151,7 @@ export function inviteParty(envelopeId, partyId, { baseUrl, actor = "system" } =
 }
 
 export function startSigningInvites(envelopeId, baseUrl, actor = "staff") {
+  assertContractMayBeIssued(envelopeId);
   const envelope = db.prepare("SELECT * FROM envelopes WHERE id = ?").get(envelopeId);
   if (!envelope || envelope.status !== "ready") {
     throw new Error("Envelope must be ready before inviting");
@@ -185,9 +198,7 @@ export async function applySignatureAndCompleteParty({
   }
 
   // role-owned fields must be complete when required
-  const fields = db
-    .prepare("SELECT * FROM template_fields WHERE role_id = ?")
-    .all(actionable.role_id);
+  const fields = fieldsForParty(envelopeId, actionable.role_id);
   for (const field of fields) {
     if (!field.required) continue;
     if (field.field_type === "signature" || field.field_type === "initials") continue;
@@ -313,6 +324,157 @@ export async function applySignatureAndCompleteParty({
   return { nextPartyId: null, completed: true, signatureId: sigId };
 }
 
+function pdfText(value) {
+  return String(value || "").replace(/[^\x20-\x7E]/g, " ");
+}
+
+/** Signing attachments, in sign order, ready to bind ahead of the audit trail. */
+export function listSigningAttachments(envelopeId) {
+  const parties = db
+    .prepare(
+      `SELECT p.id, p.signer_name, r.role_key, r.label AS role_label
+       FROM envelope_parties p
+       JOIN template_roles r ON r.id = p.role_id
+       WHERE p.envelope_id = ?
+       ORDER BY p.order_index ASC`
+    )
+    .all(envelopeId);
+  const files = db
+    .prepare(
+      `SELECT f.*, r.requirement_key, r.label
+       FROM evidence_files f
+       JOIN evidence_requirements r ON r.id = f.requirement_id
+       WHERE f.envelope_id = ? AND f.deleted_at IS NULL`
+    )
+    .all(envelopeId);
+  const entries = [];
+  for (const party of parties) {
+    const keys = FINAL_EVIDENCE[party.role_key] || [];
+    const allowed = new Set(keys.map(([key]) => key));
+    const mine = files.filter(
+      (file) => file.party_id === party.id && allowed.has(file.requirement_key)
+    );
+    const used = new Set();
+    const pushFile = (file, label) => {
+      used.add(file.id);
+      entries.push({
+        heading: `${party.role_label} - ${label}`,
+        detail: `${party.signer_name} · ${file.original_name || "attachment"}`,
+        bytes: readBytes(file.storage_ref),
+      });
+    };
+    for (const [key, label] of keys) {
+      const file = mine.find((row) => row.requirement_key === key);
+      if (file) pushFile(file, file.label || label);
+    }
+    for (const file of mine) {
+      if (!used.has(file.id)) pushFile(file, file.label || file.requirement_key);
+    }
+  }
+  return entries;
+}
+
+async function drawAttachmentNote(pdf, font, bold, entry, note) {
+  const page = pdf.addPage([595.28, 841.89]);
+  page.drawText(pdfText(entry.heading).slice(0, 90), {
+    x: 48,
+    y: 780,
+    size: 16,
+    font: bold,
+    color: rgb(0.1, 0.12, 0.16),
+  });
+  page.drawText(pdfText(entry.detail).slice(0, 110), {
+    x: 48,
+    y: 752,
+    size: 11,
+    font,
+    color: rgb(0.2, 0.24, 0.3),
+  });
+  page.drawText(pdfText(note), {
+    x: 48,
+    y: 720,
+    size: 11,
+    font,
+    color: rgb(0.1, 0.12, 0.16),
+  });
+}
+
+/** Bind each requested attachment. The caller adds the audit trail after this. */
+export async function appendBoundAttachments(pdf, entries) {
+  const font = await pdf.embedFont(StandardFonts.Helvetica);
+  const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
+  for (const entry of entries) {
+    const bytes = Buffer.from(entry.bytes);
+    if (bytes.slice(0, 5).toString() === "%PDF-") {
+      let src;
+      try {
+        src = await PDFDocument.load(bytes);
+      } catch {
+        await drawAttachmentNote(
+          pdf,
+          font,
+          bold,
+          entry,
+          "This PDF could not be embedded. The original file is stored with the contract record."
+        );
+        continue;
+      }
+      const slip = pdf.addPage([595.28, 841.89]);
+      slip.drawText(pdfText(entry.heading).slice(0, 90), {
+        x: 48,
+        y: 780,
+        size: 16,
+        font: bold,
+        color: rgb(0.1, 0.12, 0.16),
+      });
+      slip.drawText(pdfText(entry.detail).slice(0, 110), {
+        x: 48,
+        y: 752,
+        size: 11,
+        font,
+        color: rgb(0.2, 0.24, 0.3),
+      });
+      const copied = await pdf.copyPages(src, src.getPageIndices());
+      for (const page of copied) pdf.addPage(page);
+      continue;
+    }
+    const page = pdf.addPage([595.28, 841.89]);
+    page.drawText(pdfText(entry.heading).slice(0, 90), {
+      x: 48,
+      y: 800,
+      size: 14,
+      font: bold,
+      color: rgb(0.1, 0.12, 0.16),
+    });
+    page.drawText(pdfText(entry.detail).slice(0, 110), {
+      x: 48,
+      y: 778,
+      size: 10,
+      font,
+      color: rgb(0.2, 0.24, 0.3),
+    });
+    const isJpeg = bytes[0] === 0xff && bytes[1] === 0xd8;
+    const isPng =
+      bytes.length >= 8 &&
+      bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+    if (!isJpeg && !isPng) {
+      page.drawText("This file is stored with the contract record.", {
+        x: 48,
+        y: 740,
+        size: 11,
+        font,
+        color: rgb(0.1, 0.12, 0.16),
+      });
+      continue;
+    }
+    const image = isJpeg ? await pdf.embedJpg(bytes) : await pdf.embedPng(bytes);
+    const scale = Math.min(500 / image.width, 700 / image.height, 1);
+    const width = image.width * scale;
+    const height = image.height * scale;
+    page.drawImage(image, { x: 48, y: 750 - height, width, height });
+  }
+}
+
 export async function finalizeEnvelope(envelopeId) {
   const envelope = db.prepare("SELECT * FROM envelopes WHERE id = ?").get(envelopeId);
   const entity = db.prepare("SELECT * FROM entities WHERE id = ?").get(envelope.entity_id);
@@ -323,6 +485,7 @@ export async function finalizeEnvelope(envelopeId) {
   const pdf = await PDFDocument.load(bakedBytes);
   const font = await pdf.embedFont(StandardFonts.Helvetica);
   const pages = pdf.getPages();
+  const placed = envelopePlacedFields(envelopeId);
   const pageOffset = Number(envelope.contract_page_offset || 0);
 
   const signatures = db
@@ -331,16 +494,25 @@ export async function finalizeEnvelope(envelopeId) {
 
   for (const sig of signatures) {
     const party = db.prepare("SELECT * FROM envelope_parties WHERE id = ?").get(sig.party_id);
-    const fields = db
-      .prepare(
-        `SELECT * FROM template_fields
-         WHERE role_id = ? AND field_type IN ('signature','initials')`
-      )
-      .all(party.role_id);
+    const fields = placed.length
+      ? placed.filter(
+          (f) =>
+            f.role_id === party.role_id &&
+            ["signature", "initials"].includes(f.field_type)
+        )
+      : db
+          .prepare(
+            `SELECT * FROM template_fields
+             WHERE role_id = ? AND field_type IN ('signature','initials')`
+          )
+          .all(party.role_id);
     const pngBytes = readBytes(sig.signature_asset_ref);
     const image = await pdf.embedPng(pngBytes);
     for (const field of fields) {
-      const page = pages[Math.min(pageOffset + (field.page || 0), pages.length - 1)];
+      const pageIndex = placed.length
+        ? Number(field.page || 0)
+        : pageOffset + (field.page || 0);
+      const page = pages[Math.min(pageIndex, pages.length - 1)];
       page.drawImage(image, {
         x: Number(field.x),
         y: Number(field.y),
@@ -351,18 +523,41 @@ export async function finalizeEnvelope(envelopeId) {
   }
 
   // text field values
-  const values = db
-    .prepare(
-      `SELECT fv.*, tf.field_type, tf.page, tf.x, tf.y, tf.w, tf.h
-       FROM field_values fv
-       JOIN template_fields tf ON tf.id = fv.field_id
-       WHERE fv.envelope_id = ?`
-    )
-    .all(envelopeId);
+  const values = placed.length
+    ? db
+        .prepare(
+          `SELECT fv.*, ef.field_type, ef.page, ef.x, ef.y, ef.w, ef.h
+           FROM field_values fv
+           JOIN envelope_fields ef ON ef.id = fv.field_id AND ef.envelope_id = fv.envelope_id
+           WHERE fv.envelope_id = ?`
+        )
+        .all(envelopeId)
+    : db
+        .prepare(
+          `SELECT fv.*, tf.field_type, tf.page, tf.x, tf.y, tf.w, tf.h
+           FROM field_values fv
+           JOIN template_fields tf ON tf.id = fv.field_id
+           WHERE fv.envelope_id = ?`
+        )
+        .all(envelopeId);
   for (const v of values) {
     if (["signature", "initials", "attachment"].includes(v.field_type)) continue;
-    const page = pages[Math.min(pageOffset + (v.page || 0), pages.length - 1)];
-    page.drawText(String(v.value || ""), {
+    const pageIndex = placed.length ? Number(v.page || 0) : pageOffset + (v.page || 0);
+    const page = pages[Math.min(pageIndex, pages.length - 1)];
+    const text = String(v.value || "");
+    if (v.field_type === "checkbox") {
+      if (text && text !== "0" && text.toLowerCase() !== "false") {
+        page.drawText("X", {
+          x: Number(v.x) + 2,
+          y: Number(v.y) + 2,
+          size: Math.min(12, Number(v.h) || 12),
+          font,
+          color: rgb(0.1, 0.1, 0.1),
+        });
+      }
+      continue;
+    }
+    page.drawText(text, {
       x: Number(v.x) + 2,
       y: Number(v.y) + 4,
       size: 10,
@@ -371,7 +566,23 @@ export async function finalizeEnvelope(envelopeId) {
     });
   }
 
-  const completedBytes = Buffer.from(await pdf.save());
+  const signedBytes = Buffer.from(await pdf.save());
+  const signedHash = sha256(signedBytes);
+  const signedPdf = await PDFDocument.load(signedBytes);
+  const attachments = listSigningAttachments(envelopeId);
+  await appendBoundAttachments(signedPdf, attachments);
+  const chain = verifyEventChain(envelopeId);
+  const certDoc = await buildAuditCertificate({
+    envelope: { ...envelope, completed_at: now() },
+    entity,
+    completedHash: signedHash,
+    chain,
+    attachmentCount: attachments.length,
+  });
+  const certPages = await signedPdf.copyPages(certDoc, certDoc.getPageIndices());
+  certPages.forEach((p) => signedPdf.addPage(p));
+
+  const completedBytes = Buffer.from(await signedPdf.save());
   const completedFile = writeBytes(
     "completed",
     `${envelopeId}-completed.pdf`,
@@ -390,35 +601,7 @@ export async function finalizeEnvelope(envelopeId) {
     now()
   );
 
-  // certificate page
-  const cert = await PDFDocument.create();
-  const certPage = cert.addPage([595.28, 841.89]);
-  certPage.drawText("Attest completion certificate", {
-    x: 50,
-    y: 780,
-    size: 18,
-    font: await cert.embedFont(StandardFonts.HelveticaBold),
-  });
-  const bodyFont = await cert.embedFont(StandardFonts.Helvetica);
-  const lines = [
-    `Envelope: ${envelope.id}`,
-    `Title: ${envelope.title || ""}`,
-    `Entity: ${entity.legal_name}`,
-    `Baked hash: ${envelope.baked_hash}`,
-    `Completed hash: ${completedFile.sha256}`,
-    "",
-    "Signers:",
-    ...signatures.map((s) => {
-      const p = db.prepare("SELECT * FROM envelope_parties WHERE id = ?").get(s.party_id);
-      return `- ${p.signer_name} <${p.signer_email}> @ ${s.signed_at} ip=${s.ip}`;
-    }),
-  ];
-  let y = 740;
-  for (const line of lines) {
-    certPage.drawText(line.slice(0, 95), { x: 50, y, size: 10, font: bodyFont });
-    y -= 16;
-  }
-  const certBytes = Buffer.from(await cert.save());
+  const certBytes = Buffer.from(await certDoc.save());
   const certFile = writeBytes("certificates", `${envelopeId}-certificate.pdf`, certBytes);
   const certDocId = newId();
   db.prepare(

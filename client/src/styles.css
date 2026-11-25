@@ -13,6 +13,7 @@
   --danger: #c0392b;
   --ok: #1f7a4d;
   --line: rgba(16, 24, 40, 0.12);
+  --field-line: #667085;
   --shadow: 0 14px 40px rgba(16, 24, 40, 0.1);
   --radius: 8px;
   --font-sans: "Manrope", "Helvetica Neue", Helvetica, sans-serif;
@@ -79,14 +80,15 @@ select {
 
 .brand {
   display: flex;
-  align-items: center;
-  gap: 0.85rem;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.2rem;
   color: inherit;
 }
 
 .brand-logo {
   display: block;
-  height: 36px;
+  height: 42px;
   width: auto;
   animation: rise-in 0.55s ease both;
 }
@@ -107,10 +109,10 @@ select {
 
 .brand-sub {
   color: var(--ink-soft);
-  font-size: 0.7rem;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
 }
 
 .main {
@@ -144,6 +146,77 @@ select {
   font-weight: 500;
 }
 
+.choice-grid {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.choice-card {
+  appearance: none;
+  display: grid;
+  gap: 0.3rem;
+  width: 100%;
+  text-align: left;
+  text-decoration: none;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--field-line);
+  border-radius: var(--radius);
+  padding: 1.15rem 1.2rem;
+  cursor: pointer;
+  font: inherit;
+}
+
+.choice-card strong {
+  font-size: 1.08rem;
+  font-weight: 800;
+}
+
+.choice-card span {
+  color: var(--ink-soft);
+  font-weight: 500;
+}
+
+.choice-card:hover {
+  border-color: var(--accent);
+  color: var(--ink);
+}
+
+.choice-hit {
+  appearance: none;
+  background: none;
+  border: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.3rem;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.choice-card a {
+  font-size: 0.92rem;
+  font-weight: 700;
+}
+
+.start-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem 1.5rem;
+  margin-top: 1.5rem;
+}
+
+.start-links a {
+  color: var(--ink-soft);
+  font-weight: 700;
+  font-size: 0.92rem;
+}
+
+.wizard-back {
+  margin-bottom: 1.25rem;
+}
+
 .nav-links {
   display: flex;
   align-items: center;
@@ -169,6 +242,35 @@ select {
   margin: 1.25rem 0 1.75rem;
 }
 
+.setup-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.15rem;
+  margin: -0.5rem 0 1.25rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.setup-tabs button {
+  appearance: none;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  padding: 0.7rem 1.05rem;
+  color: var(--ink-soft);
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.setup-tabs button:hover {
+  color: var(--accent-deep);
+}
+
+.setup-tabs button.is-active {
+  color: var(--accent-deep);
+  border-bottom-color: var(--accent);
+}
+
 .party-card {
   border: 1px solid var(--line);
   border-radius: var(--radius);
@@ -191,6 +293,40 @@ select {
   background: #fff;
 }
 
+.file-slot-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  overflow: hidden;
+}
+
+.verify-outbox {
+  margin: 0;
+  padding: 0.7rem 0.85rem;
+  border: 1px dashed var(--line);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.8);
+  font-size: 0.85rem;
+  white-space: pre-wrap;
+}
+
+.verify-copy-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.4rem;
+  align-items: center;
+}
+
+.verify-ok {
+  color: var(--ok);
+  font-size: 0.9rem;
+  margin: 0;
+}
+
 .consent {
   display: grid;
   grid-template-columns: auto 1fr;
@@ -200,13 +336,50 @@ select {
   font-size: 0.92rem;
 }
 
+input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="hidden"]):not([type="button"]):not([type="submit"]):not([type="reset"]),
+textarea,
 select {
   width: 100%;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 0.7rem 0.85rem;
-  background: var(--surface);
+  min-height: 3.05rem;
+  border: 1px solid var(--field-line);
+  border-radius: var(--radius);
+  padding: 0.72rem 0.9rem;
+  background-color: var(--surface);
   color: var(--ink);
+  font-weight: 500;
+  appearance: none;
+}
+
+select {
+  padding-right: 2.4rem;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='none' stroke='%23667085' stroke-width='1.6' d='M1 1.5 6 6.5 11 1.5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.9rem center;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: #98a2b3;
+  font-weight: 500;
+  opacity: 1;
+}
+
+input:disabled,
+textarea:disabled,
+select:disabled {
+  background-color: #f4f6f8;
+  color: var(--ink-soft);
+}
+
+input[type="file"]:not(.file-slot-input) {
+  width: 100%;
+  min-height: 3.05rem;
+  border: 1px solid var(--field-line);
+  border-radius: var(--radius);
+  padding: 0.6rem 0.9rem;
+  background: var(--surface);
+  color: var(--ink-soft);
+  font-weight: 500;
 }
 
 .badge.ready,
@@ -405,31 +578,17 @@ label {
   color: var(--ink-soft);
 }
 
-input[type="text"],
-input[type="email"],
-input[type="date"],
-input[type="file"],
-textarea {
-  width: 100%;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 0.7rem 0.85rem;
-  background: var(--surface);
-  color: var(--ink);
-  font-weight: 500;
-}
-
 input:focus,
 select:focus,
 textarea:focus {
-  outline: 2px solid rgba(0, 116, 255, 0.3);
+  outline: 2px solid rgba(0, 116, 255, 0.28);
   border-color: var(--accent);
 }
 
 .signer-row {
   display: grid;
-  grid-template-columns: 1fr 1fr auto;
-  gap: 0.6rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
   align-items: end;
 }
 
@@ -566,6 +725,180 @@ textarea:focus {
 .muted {
   color: var(--ink-soft);
   font-size: 0.88rem;
+}
+
+.gmail-signature-editor {
+  min-height: 9rem;
+  width: 100%;
+  border: 1px solid var(--field-line);
+  border-radius: 6px;
+  padding: 0.7rem 0.85rem;
+  background: var(--surface);
+  color: var(--ink);
+  font-weight: 500;
+  overflow: auto;
+}
+
+.gmail-signature-editor:focus {
+  outline: 2px solid rgba(0, 116, 255, 0.3);
+  border-color: var(--accent);
+}
+
+.gmail-signature-editor:empty:before {
+  content: attr(data-placeholder);
+  color: var(--ink-soft);
+  font-weight: 500;
+}
+
+.gmail-signature-editor img {
+  max-width: min(480px, 100%);
+  height: auto;
+}
+
+.brand-slots {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.85rem;
+}
+
+.brand-slots.template-slots {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.brand-slot {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 0.85rem;
+  display: grid;
+  gap: 0.7rem;
+  align-content: start;
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.brand-slot.is-complete {
+  border-color: rgba(31, 122, 77, 0.4);
+  background: #f4fbf6;
+}
+
+.brand-slot-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.brand-slot-head h3 {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 800;
+  color: var(--ink);
+}
+
+.brand-slot-preview {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.brand-slot-filemeta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.45rem;
+}
+
+.brand-slot-filemeta .btn {
+  min-height: 2rem;
+  padding: 0.25rem 0.7rem;
+}
+
+.brand-slot-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.asset-library li {
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  column-gap: 0.75rem;
+}
+
+.asset-library li .btn {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  min-height: 2rem;
+  padding: 0.25rem 0.7rem;
+  align-self: center;
+}
+
+.save-status {
+  position: fixed;
+  right: 1.25rem;
+  bottom: 1.25rem;
+  z-index: 30;
+  padding: 0.7rem 1.05rem;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  font-size: 0.88rem;
+  font-weight: 800;
+  color: var(--ink-soft);
+}
+
+.save-status.saving {
+  color: var(--up-blue-ink);
+  background: var(--mist);
+  border-color: rgba(0, 116, 255, 0.25);
+}
+
+.save-status.saved {
+  color: var(--ok);
+  background: #d8efe0;
+  border-color: rgba(31, 122, 77, 0.3);
+}
+
+.save-status.error {
+  color: var(--danger);
+  background: #fdecea;
+  border-color: rgba(192, 57, 43, 0.25);
+}
+
+.brand-slot-empty {
+  min-height: 140px;
+  display: grid;
+  place-items: center;
+  border: 1px dashed var(--line);
+  border-radius: 6px;
+  color: var(--ink-soft);
+  font-size: 0.88rem;
+  background: rgba(255, 255, 255, 0.65);
+}
+
+.asset-preview-frame {
+  width: 100%;
+  height: 240px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+}
+
+.asset-preview-img {
+  display: block;
+  width: 100%;
+  max-height: 180px;
+  object-fit: contain;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  padding: 0.5rem;
+}
+
+@media (max-width: 900px) {
+  .brand-slots {
+    grid-template-columns: 1fr;
+  }
 }
 
 .signature-preview {

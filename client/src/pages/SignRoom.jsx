@@ -1,82 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import { api } from "../api.js";
-
-function SignaturePad({ onChange }) {
-  const canvasRef = useRef(null);
-  const drawing = useRef(false);
-  const last = useRef(null);
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    const ratio = window.devicePixelRatio || 1;
-    const rect = canvas.getBoundingClientRect();
-    canvas.width = rect.width * ratio;
-    canvas.height = rect.height * ratio;
-    const ctx = canvas.getContext("2d");
-    ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
-    ctx.lineWidth = 2.2;
-    ctx.lineCap = "round";
-    ctx.strokeStyle = "#101828";
-  }, []);
-
-  function point(e) {
-    const rect = canvasRef.current.getBoundingClientRect();
-    const src = e.touches?.[0] || e;
-    return { x: src.clientX - rect.left, y: src.clientY - rect.top };
-  }
-
-  function emit() {
-    onChange?.(canvasRef.current.toDataURL("image/png"));
-  }
-
-  return (
-    <div>
-      <div className="sig-pad-wrap">
-        <canvas
-          ref={canvasRef}
-          onMouseDown={(e) => {
-            e.preventDefault();
-            drawing.current = true;
-            last.current = point(e);
-          }}
-          onMouseMove={(e) => {
-            if (!drawing.current) return;
-            e.preventDefault();
-            const ctx = canvasRef.current.getContext("2d");
-            const p = point(e);
-            ctx.beginPath();
-            ctx.moveTo(last.current.x, last.current.y);
-            ctx.lineTo(p.x, p.y);
-            ctx.stroke();
-            last.current = p;
-            emit();
-          }}
-          onMouseUp={(e) => {
-            drawing.current = false;
-            e.preventDefault();
-            emit();
-          }}
-          onMouseLeave={() => {
-            drawing.current = false;
-          }}
-        />
-      </div>
-      <button
-        type="button"
-        className="btn secondary"
-        onClick={() => {
-          const canvas = canvasRef.current;
-          const ctx = canvas.getContext("2d");
-          ctx.clearRect(0, 0, canvas.width, canvas.height);
-          onChange?.("");
-        }}
-      >
-        Clear signature
-      </button>
-    </div>
-  );
-}
+import SignaturePad from "../SignaturePad.jsx";
 
 export default function SignRoom() {
   const { token } = useParams();
@@ -86,9 +11,15 @@ export default function SignRoom() {
   const [consent, setConsent] = useState(false);
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(false);
+  const [jumpPage, setJumpPage] = useState(null);
+  const [fieldValues, setFieldValues] = useState({});
 
   async function reload() {
-    setSession(await api.signSession(token));
+    const next = await api.signSession(token);
+    setSession(next);
+    const map = {};
+    for (const value of next.values || []) map[value.field_id] = value.value;
+    setFieldValues(map);
   }
 
   useEffect(() => {
@@ -109,11 +40,23 @@ export default function SignRoom() {
     }
   }
 
+  async function saveFieldValue(field, value) {
+    setFieldValues((prev) => ({ ...prev, [field.id]: value }));
+    setError("");
+    try {
+      await api.saveField(token, field.id, value);
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
   async function saveDateFields() {
     const dateFields = (session.fields || []).filter((f) => f.field_type === "date");
     const today = new Date().toISOString().slice(0, 10);
     for (const field of dateFields) {
+      if (fieldValues[field.id]) continue;
       await api.saveField(token, field.id, today);
+      setFieldValues((prev) => ({ ...prev, [field.id]: today }));
     }
   }
 
@@ -141,12 +84,27 @@ export default function SignRoom() {
   if (!session) return <p className="muted">Validating signing link…</p>;
 
   const gateOk = session.gate?.ok;
+  const partyFields = session.fields || [];
+  const missingFields = partyFields.filter((field) => {
+    if (!field.required) return false;
+    if (field.field_type === "signature" || field.field_type === "initials") return false;
+    const value = fieldValues[field.id];
+    return value == null || value === "" || value === false;
+  });
+  const pdfSrc = jumpPage
+    ? `${session.document_url}#page=${jumpPage}`
+    : session.document_url;
 
   return (
     <div>
       <section className="hero-panel">
         <h1>
           Sign as {session.party.role_label}: {session.party.signer_name}
+          {session.party.signer_role === "authorised_signatory"
+            ? " (Authorised signatory)"
+            : session.party.signer_role === "director"
+              ? " (Director)"
+              : ""}
         </h1>
         <p>
           {session.envelope.title}. Document hash must match the baked snapshot at
@@ -160,15 +118,85 @@ export default function SignRoom() {
 
       <div className="split">
         <iframe
+          key={pdfSrc}
           title="Baked document"
           className="pdf-frame"
-          src={session.document_url}
+          src={pdfSrc}
         />
 
         <div className="panel form-grid">
-          {session.party.role_key === "company" || session.checklist?.length ? (
+          {partyFields.length ? (
             <div>
-              <h2>Evidence checklist</h2>
+              <h2>Your fields</h2>
+              <p className="muted">
+                Jump to each place in the contract that needs your details or
+                signature. Appendix acceptance fields are included when those
+                terms need signing too.
+              </p>
+              <div className="form-grid">
+                {partyFields.map((field) => (
+                  <div className="party-card" key={field.id}>
+                    <div className="toolbar" style={{ margin: 0 }}>
+                      <strong>{field.label}</strong>
+                      <button
+                        className="btn secondary"
+                        type="button"
+                        onClick={() => setJumpPage(field.jump_page || 1)}
+                      >
+                        Jump to
+                      </button>
+                    </div>
+                    <p className="meta">
+                      {field.source_label} · page {field.jump_page || 1} · {field.field_type}
+                    </p>
+                    {field.field_type === "text" ? (
+                      <input
+                        value={fieldValues[field.id] || ""}
+                        placeholder={field.label}
+                        onChange={(e) =>
+                          setFieldValues((prev) => ({
+                            ...prev,
+                            [field.id]: e.target.value,
+                          }))
+                        }
+                        onBlur={(e) => saveFieldValue(field, e.target.value)}
+                      />
+                    ) : null}
+                    {field.field_type === "date" ? (
+                      <input
+                        type="date"
+                        value={fieldValues[field.id] || ""}
+                        onChange={(e) => saveFieldValue(field, e.target.value)}
+                      />
+                    ) : null}
+                    {field.field_type === "checkbox" ? (
+                      <label className="consent">
+                        <input
+                          type="checkbox"
+                          checked={Boolean(fieldValues[field.id])}
+                          onChange={(e) =>
+                            saveFieldValue(field, e.target.checked ? "yes" : "")
+                          }
+                        />
+                        <span>I accept these terms</span>
+                      </label>
+                    ) : null}
+                    {field.field_type === "signature" || field.field_type === "initials" ? (
+                      <p className="muted">Use the signature pad below for this field.</p>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          {session.checklist?.length ? (
+            <div>
+              <h2>Final evidence appendix</h2>
+              <p className="muted">
+                These were not collected in the due diligence pack. Upload them
+                before you can sign.
+              </p>
               <div className="form-grid">
                 {session.checklist.map((item) => (
                   <div className="party-card" key={item.id}>
@@ -179,14 +207,27 @@ export default function SignRoom() {
                       </span>
                     </strong>
                     <p className="muted">{item.description}</p>
-                    <input
-                      type="file"
-                      accept=".pdf,.png,.jpg,.jpeg"
-                      onChange={(e) => {
-                        const file = e.target.files?.[0];
-                        if (file) onUpload(item.id, file);
-                      }}
-                    />
+                    {(item.files || []).length ? (
+                      <ul className="meta" style={{ margin: "0.35rem 0" }}>
+                        {item.files.map((file) => (
+                          <li key={file.id}>{file.original_name}</li>
+                        ))}
+                      </ul>
+                    ) : null}
+                    <label className="muted">
+                      {item.allow_multiple && (item.files || []).length
+                        ? "Add another file"
+                        : "Upload file"}
+                      <input
+                        type="file"
+                        accept=".pdf,.png,.jpg,.jpeg"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) onUpload(item.id, file);
+                          e.target.value = "";
+                        }}
+                      />
+                    </label>
                   </div>
                 ))}
               </div>
@@ -217,10 +258,23 @@ export default function SignRoom() {
           <button
             className="btn"
             type="button"
-            disabled={busy || !consent || !signatureDataUrl || !session.is_turn || !gateOk}
+            disabled={
+              busy ||
+              !consent ||
+              !signatureDataUrl ||
+              !session.is_turn ||
+              !gateOk ||
+              missingFields.length > 0
+            }
             onClick={submitSign}
           >
-            {busy ? "Signing…" : gateOk ? "Finish & sign" : "Evidence gate locked"}
+            {busy
+              ? "Signing…"
+              : !gateOk
+                ? "Evidence gate locked"
+                : missingFields.length
+                  ? "Complete required fields"
+                  : "Finish & sign"}
           </button>
         </div>
       </div>

@@ -20,7 +20,7 @@ Parent brand: [Union Payroll](https://union-payroll.ltd/) (`#0074FF`, Manrope).
 - Evidence gate for company role before signature
 - Signatures store consent text verbatim + `document_hash` must equal `baked_hash`
 - Append-only `events` table with hash chain verification
-- Local “email outbox” (`outbound_emails`) instead of a transactional ESP
+- Local “email outbox” plus real SMTP (Gmail App Password) or Outlook on Windows for from-address codes
 - Completion PDF + certificate artifacts on disk under `server/data/files`
 
 ## Run
@@ -67,7 +67,7 @@ Uses localhost.run (not Cloudflare quick tunnels). Coding/commits must not resta
 | Cloud SQL (Postgres) | SQLite (`server/data/attest.sqlite`) |
 | GCS | `server/data/files/**` |
 | Google Identity | Seeded local staff user (no Google auth) |
-| Transactional email + DNS domains | Verified flag + local outbox log |
+| Transactional email + DNS domains | SMTP / Outlook send + verified DNS or mailbox code |
 | Companies House / HMRC APIs | Upload-only evidence path in seed |
 
 ## Notes

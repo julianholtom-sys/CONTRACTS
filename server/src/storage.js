@@ -13,6 +13,8 @@ const DIRS = {
   signatures: path.join(ROOT, "signatures"),
   assets: path.join(ROOT, "assets"),
   uploads: path.join(ROOT, "uploads"),
+  diligence: path.join(ROOT, "diligence"),
+  registry: path.join(ROOT, "registry"),
 };
 
 for (const dir of Object.values(DIRS)) {

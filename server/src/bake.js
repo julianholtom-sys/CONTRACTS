@@ -1,7 +1,9 @@
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
+import { coverDetails, stampCoverDetails } from "./coverStamp.js";
 import { db, newId, now, sha256, parseJson } from "./db.js";
 import { appendEvent } from "./events.js";
 import { readBytes, writeBytes } from "./storage.js";
+import { snapshotEnvelopeFields, envelopePlacedFields } from "./documentFields.js";
 
 async function loadOrCreateSourcePdf(template) {
   let bytes;
@@ -21,6 +23,37 @@ async function loadOrCreateSourcePdf(template) {
     bytes = Buffer.from(await doc.save());
   }
   return bytes;
+}
+
+function isSvgAsset(asset) {
+  const mime = String(asset?.mime || "").toLowerCase();
+  const ref = String(asset?.storage_ref || "").toLowerCase();
+  const name = String(asset?.name || "").toLowerCase();
+  return mime.includes("svg") || ref.endsWith(".svg") || name.endsWith(".svg");
+}
+
+function isPngAsset(asset) {
+  const mime = String(asset?.mime || "").toLowerCase();
+  const ref = String(asset?.storage_ref || "").toLowerCase();
+  const name = String(asset?.name || "").toLowerCase();
+  return mime.includes("png") || ref.endsWith(".png") || name.endsWith(".png");
+}
+
+async function svgToPngBytes(svgBytes) {
+  const { Resvg } = await import("@resvg/resvg-js");
+  const resvg = new Resvg(svgBytes, { fitTo: { mode: "width", value: 280 } });
+  return resvg.render().asPng();
+}
+
+async function embedLogoImage(bakedDoc, asset) {
+  const logoBytes = readBytes(asset.storage_ref);
+  if (isSvgAsset(asset)) {
+    return bakedDoc.embedPng(await svgToPngBytes(logoBytes));
+  }
+  if (isPngAsset(asset)) {
+    return bakedDoc.embedPng(logoBytes);
+  }
+  return bakedDoc.embedJpg(logoBytes);
 }
 
 async function pdfFromAsset(asset) {
@@ -89,7 +122,16 @@ export function resolveBrandPack(entityId, { industry = null, appendixIds = [] }
   return { front, back, logo, industry: industry || null, appendices };
 }
 
-export function getMasterTemplate() {
+export function getMasterTemplate({ includeInactive = false } = {}) {
+  if (includeInactive) {
+    return db
+      .prepare(
+        `SELECT * FROM templates
+         WHERE is_master = 1
+         ORDER BY is_active DESC, created_at ASC LIMIT 1`
+      )
+      .get();
+  }
   return (
     db
       .prepare(
@@ -117,9 +159,7 @@ export async function bakeEnvelope(envelopeId, { actor = "system" } = {}) {
 
   try {
     const entity = db.prepare("SELECT * FROM entities WHERE id = ?").get(envelope.entity_id);
-    if (!entity?.domain_verified) {
-      throw new Error("Entity domain is not verified");
-    }
+    if (!entity) throw new Error("Broker not found");
 
     const parties = db
       .prepare(
@@ -205,6 +245,25 @@ export async function bakeEnvelope(envelopeId, { actor = "system" } = {}) {
     if (frontDoc) {
       const pages = await bakedDoc.copyPages(frontDoc, frontDoc.getPageIndices());
       pages.forEach((p) => bakedDoc.addPage(p));
+      const parties = db
+        .prepare(
+          `SELECT p.company_name, r.role_key
+           FROM envelope_parties p
+           JOIN template_roles r ON r.id = p.role_id
+           WHERE p.envelope_id = ?`
+        )
+        .all(envelopeId);
+      stampCoverDetails(
+        bakedDoc.getPages()[0],
+        font,
+        bold,
+        coverDetails(
+          envelope,
+          Object.fromEntries(parties.map((party) => [party.role_key, party])),
+          entity,
+          "Contract"
+        )
+      );
     }
 
     const contractDoc = await PDFDocument.load(readBytes(version.storage_ref));
@@ -246,11 +305,7 @@ export async function bakeEnvelope(envelopeId, { actor = "system" } = {}) {
       }
       if (brand.logo) {
         try {
-          const logoBytes = readBytes(brand.logo.storage_ref);
-          const logoImage =
-            (brand.logo.mime || "").includes("png") || brand.logo.storage_ref.endsWith(".png")
-              ? await bakedDoc.embedPng(logoBytes)
-              : await bakedDoc.embedJpg(logoBytes);
+          const logoImage = await embedLogoImage(bakedDoc, brand.logo);
           firstContract.drawImage(logoImage, {
             x: 480,
             y: 780,
@@ -263,10 +318,35 @@ export async function bakeEnvelope(envelopeId, { actor = "system" } = {}) {
       }
     }
 
-    // Field placeholders are positioned on the contract page indices (0-based within contract)
-    for (const field of fields) {
+    const appendixStarts = [];
+    for (const appendix of brand.appendices) {
+      const appendixDoc = await PDFDocument.load(readBytes(appendix.storage_ref));
+      const pageIndex = bakedDoc.getPageCount();
+      const pages = await bakedDoc.copyPages(appendixDoc, appendixDoc.getPageIndices());
+      pages.forEach((p) => bakedDoc.addPage(p));
+      appendixStarts.push({ id: appendix.id, pageIndex });
+    }
+
+    const backDoc = await pdfFromAsset(brand.back);
+    if (backDoc) {
+      const pages = await bakedDoc.copyPages(backDoc, backDoc.getPageIndices());
+      pages.forEach((p) => bakedDoc.addPage(p));
+    }
+
+    // If somehow empty, keep contract only
+    if (bakedDoc.getPageCount() === 0) {
+      throw new Error("Bake produced an empty document");
+    }
+
+    snapshotEnvelopeFields(envelopeId, {
+      contractPageOffset,
+      appendixStarts,
+    });
+
+    const placedFields = envelopePlacedFields(envelopeId);
+    for (const field of placedFields) {
       const page = bakedDoc.getPages()[
-        Math.min(contractStartIndex + (field.page || 0), bakedDoc.getPageCount() - 1)
+        Math.min(Number(field.page || 0), bakedDoc.getPageCount() - 1)
       ];
       const x = Number(field.x);
       const y = Number(field.y);
@@ -290,23 +370,6 @@ export async function bakeEnvelope(envelopeId, { actor = "system" } = {}) {
         font,
         color: rgb(0.05, 0.35, 0.32),
       });
-    }
-
-    for (const appendix of brand.appendices) {
-      const appendixDoc = await PDFDocument.load(readBytes(appendix.storage_ref));
-      const pages = await bakedDoc.copyPages(appendixDoc, appendixDoc.getPageIndices());
-      pages.forEach((p) => bakedDoc.addPage(p));
-    }
-
-    const backDoc = await pdfFromAsset(brand.back);
-    if (backDoc) {
-      const pages = await bakedDoc.copyPages(backDoc, backDoc.getPageIndices());
-      pages.forEach((p) => bakedDoc.addPage(p));
-    }
-
-    // If somehow empty, keep contract only
-    if (bakedDoc.getPageCount() === 0) {
-      throw new Error("Bake produced an empty document");
     }
 
     void bold;

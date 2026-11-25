@@ -5,20 +5,27 @@ Update both when product decisions, architecture, or demo access change, then co
 
 ## Product intent
 
-- Local three-party e-sign (company / agency / supplier) for **Union Payroll** as the parent sender.
+- E-sign for **Union Payroll**. Almost every contract is 3-way (**Contractor**, **Broker**, **Client**). A 4-way adds **Supplier (SPV)**. API keys remain `supplier` / `agency` / `company`, plus `spv`. Sign order is Contractor, Supplier (4-way only), Broker, Client.
 - Spec: `docs/esign-data-model.pdf` (Postgres/GCS in the brief → SQLite + local disk here).
-- Brand source of truth: https://union-payroll.ltd/ (logo blue `#0074FF`, Manrope, white-text primary buttons).
+- The app header says **Contract Builder**. A contract is sent for a broker, and that broker’s cover is what the parties see on the document. Union Payroll (https://union-payroll.ltd/) is one broker. E Street Management (https://es.management/) is another. The header does not use a single broker’s logo. Accent `#0074FF`, Manrope, white-text primary buttons.
+
+## Model for this repo
+
+Use the latest **Claude Opus** for product work on this app, with thinking on. Use the latest **Claude Sonnet** for a small follow-up such as a label or a status line. Stay on one model for a whole feature, so a later session does not restore an older flow from a stale note.
 
 ## Current product shape
 
-1. **Companies** — sending-company catalog; legal details + brand pack (front/back cover, logo).
-2. **Templates** — one **master contract** (always sent) + optional **industry appendices** (upload/add/update).
-3. **Contracts** (API still uses envelope tables/routes; UI always says contract) — pick sending company → master always included → optionally tick appendices → parties → bake → send → sequential sign.
+1. **Brokers** — each broker holds legal details, the front cover, the back cover, and the brand SVG. Brokers do not send email. They have no sending domain, from address, mailbox, VAT number, or signature. The **Compliance company** sends the contract; its introductory email names the broker it is sent on behalf of. The compliance company has no Companies House number. The due diligence pack is built and signed in the app, and is not emailed out for anyone to complete. The API still stores brokers as entities.
+2. **Templates** — one **master contract** (always sent) + optional **contract appendices**. Same file controls as company brand files: **Open / Replace / Delete** (Are you sure?) plus **Add appendix** at the top of Contract appendices. Uploading a PDF detects Client / Broker / Contractor fields, and Supplier (SPV) when that word is on the page. Signing has jump-to.
+3. **Start** — after login the only question is: working from the library, or sending a new contract? A new contract asks for the broker (from the saved list), the contract type, 3-way or 4-way, then the other parties (company, signatory, role, email). The library path picks a saved broker and contractor, then asks 3-way or 4-way and the remaining parties. Companies and templates stay available from a setup link, not the main navigation. Every party record stores company name, signatory, role (Director or Authorised signatory) and email. The contract carries a signature and a date for each party. The broker signs and dates the due diligence pack.
+4. **Contracts** (API still uses envelope tables/routes; UI always says contract) — the due diligence pack is built in the app before the contract is issued. No party is emailed to complete it. Companies House filings (incorporation, change of name, registered office, PSC, officers) and a UK Sanctions List check are fetched from the company number for the contractor and, on a 4-way, the supplier. Staff attach only what cannot be fetched. Contractor: VAT certificate, Employers’ Liability, Public Liability, Professional Indemnity certificate, PI policy schedule and wording, bank statement for the account that pays workers and HMRC, illustrative payslip, and a payroll chain map with written confirmation of each PAYE reference and ERN. Supplier: HMRC PAYE registration letter, Employers’ Liability certificate, and EL policy pages naming the supplier. Declarations and the director’s certificate are generated in the pack. Received and checked dates are entered on the contract, because they change with each client. Client name-change certificates are entered on the contract. Compile the pack, then the broker signs it in the app. Send stays blocked until that signature. Then bake → send → sequential sign. Signing does not ask again for documents already in that pack. What remains is Contractor director ID, Supplier director ID, and for the Client the incorporation certificate, VAT certificate, and director ID. The broker uploads nothing at contract signing.
+5. **Access** — staff pages need an email and password. Sign links stay open to the party who holds the link. The broker opens the due diligence pack from the contract to sign it; that page is not emailed. The library, companies and contracts live in the server database, so every browser sees the same records.
 
 ## Stack
 
 - Monorepo: `client/` (Vite React), `server/` (Express + `node:sqlite`).
 - Data: `server/data/attest.sqlite`, files under `server/data/files/`.
+- Mail: the compliance company SMTP (Google Workspace / Gmail App Password), or Outlook on Windows as a fallback. Brokers do not send. Outbound mail is still logged in `outbound_emails`.
 - Prod-ish local: `npm run build && npm start` (API serves built UI on **8787**).
 
 ## Phone demo tunnel

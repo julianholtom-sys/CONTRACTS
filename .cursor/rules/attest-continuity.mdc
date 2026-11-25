@@ -7,7 +7,9 @@ alwaysApply: true
 
 At session start, read `AGENTS.md` and `docs/PROJECT_STATUS.md`.
 
-Parent brand is **Union Payroll** (https://union-payroll.ltd/), accent `#0074FF`, Manrope — not Media Launch.
+The app header is **Contract Builder**, not Attest and not a broker logo. Union Payroll (https://union-payroll.ltd/) and E Street Management (https://es.management/) are both sending companies. Accent `#0074FF`, Manrope — not Media Launch.
+
+Use the latest Claude Opus for product work on this repo. Use the latest Claude Sonnet for a small follow-up. Stay on one model for a whole feature. The due diligence pack is built and signed in the app; do not email any party to complete it.
 
 ## Live demo persistence (critical)
 

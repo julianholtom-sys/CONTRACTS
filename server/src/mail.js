@@ -1,10 +1,15 @@
 import { db, newId, now, sha256, parseJson } from "./db.js";
 import { appendEvent } from "./events.js";
+import { getComplianceCompany } from "./compliance.js";
+import { introForBroker } from "./introEmail.js";
+import { deliverMail, smtpConfig } from "./smtp.js";
 
 const REQUIRED_LINK_TYPES = new Set([
   "invitation",
   "resend",
   "turn_notification",
+  "dd_request",
+  "dd_review",
 ]);
 
 const MERGE_VARS = [
@@ -57,21 +62,6 @@ function introToHtml(text) {
     .join("");
 }
 
-function localSignatureImageHtml(entity) {
-  const asset = db
-    .prepare(
-      `SELECT id FROM entity_assets
-       WHERE entity_id = ? AND kind = 'email_header' AND is_active = 1
-       ORDER BY created_at DESC LIMIT 1`
-    )
-    .get(entity.id);
-  if (!asset) return "";
-  const port = process.env.PORT || 8787;
-  const base = (process.env.PUBLIC_BASE_URL || `http://localhost:${port}`).replace(/\/$/, "");
-  const src = `${base}/api/entities/${entity.id}/assets/${asset.id}/file`;
-  return `<p><img src="${src}" alt="Email signature" style="max-width:480px;height:auto" /></p>`;
-}
-
 export function sendTemplatedEmail({
   entityId,
   templateType,
@@ -91,19 +81,16 @@ export function sendTemplatedEmail({
     .get(entityId, templateType);
   if (!tpl) throw new Error(`Missing email template: ${templateType}`);
 
-  const introHtml = introToHtml(entity.intro_email_text);
-  const introText = String(entity.intro_email_text || "").trim();
-  const signatureImg = localSignatureImageHtml(entity);
+  const compliance = getComplianceCompany();
+  const introText = introForBroker(compliance.intro_email_text, entity.display_name);
+  const introHtml = introToHtml(introText);
   const subject = renderTemplate(tpl.subject, vars);
-  const bodyHtml = [
-    introHtml,
-    renderTemplate(tpl.body_html, vars),
-    entity.email_signature_html,
-    signatureImg,
-  ]
+  const signatureHtml = String(compliance.email_signature_html || "").trim();
+  const signatureText = String(compliance.email_signature_text || "").trim();
+  const bodyHtml = [introHtml, renderTemplate(tpl.body_html, vars), signatureHtml]
     .filter(Boolean)
     .join("\n");
-  const bodyText = [introText, renderTemplate(tpl.body_text, vars), entity.email_signature_text]
+  const bodyText = [introText, renderTemplate(tpl.body_text, vars), signatureText]
     .filter(Boolean)
     .join("\n\n");
   const contentHash = sha256(`${subject}\n${bodyHtml}\n${bodyText}`);
@@ -127,8 +114,26 @@ export function sendTemplatedEmail({
     now()
   );
 
-  // Local mode: no external mail provider — emails are persisted for inspection.
-  console.log(`[mail:${templateType}] to=${to} subject=${subject}`);
+  // Local outbox always. Delivery uses the compliance company mailbox, not the broker.
+  const smtp = smtpConfig(compliance);
+  if (smtp) {
+    deliverMail({
+      entity: compliance,
+      to,
+      subject,
+      text: bodyText,
+      html: bodyHtml,
+      allowOutlook: false,
+    })
+      .then((delivery) => {
+        console.log(`[mail:${templateType}] to=${to} via=${delivery.via} subject=${subject}`);
+      })
+      .catch((err) => {
+        console.error(`[mail:${templateType}] delivery failed to=${to}: ${err.message}`);
+      });
+  } else {
+    console.log(`[mail:${templateType}] to=${to} subject=${subject} (outbox only)`);
+  }
 
   appendEvent({
     envelopeId,
@@ -156,6 +161,18 @@ export function sendTemplatedEmail({
 
 export function seedDefaultEmailTemplates(entityId, userId = null) {
   const defaults = [
+    {
+      type: "dd_request",
+      subject: "{{entity_display_name}}: documents for {{envelope_title}}",
+      html: "<p>Hi {{signer_name}},</p><p>Please provide the due diligence documents for <strong>{{envelope_title}}</strong>. The page lists each document requested from you.</p><p><a href=\"{{signing_link}}\">Open your document page</a></p>",
+      text: "Hi {{signer_name}}, please provide the due diligence documents for {{envelope_title}}. Each requested document is on this page: {{signing_link}}",
+    },
+    {
+      type: "dd_review",
+      subject: "{{entity_display_name}}: sign the due diligence pack for {{envelope_title}}",
+      html: "<p>Hi {{signer_name}},</p><p>The due diligence documents for <strong>{{envelope_title}}</strong> have been collected. Review the pack and sign to confirm you have checked it and are satisfied with it.</p><p><a href=\"{{signing_link}}\">Review and sign the pack</a></p>",
+      text: "Hi {{signer_name}}, the due diligence documents for {{envelope_title}} have been collected. Review the pack and sign it: {{signing_link}}",
+    },
     {
       type: "invitation",
       subject: "{{entity_display_name}}: please sign {{envelope_title}}",
@@ -195,8 +212,8 @@ export function seedDefaultEmailTemplates(entityId, userId = null) {
     {
       type: "completion",
       subject: "Completed: {{envelope_title}}",
-      html: "<p>{{envelope_title}} is complete. Completed copies are attached in the local store.</p>",
-      text: "{{envelope_title}} is complete.",
+      html: "<p>{{envelope_title}} is complete.</p><p>The completed PDF binds every requested attachment, then ends with the audit trail: who received the file, when they signed, and their IP address.</p>",
+      text: "{{envelope_title}} is complete. The completed PDF binds every requested attachment, then ends with the audit trail: who received the file, when they signed, and their IP address.",
     },
   ];
 

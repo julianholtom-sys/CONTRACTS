@@ -1,0 +1,76 @@
+import { rgb } from "pdf-lib";
+
+export function contractReference(envelope, kind) {
+  const year = String(envelope?.prepared_on || "").slice(0, 4) || String(new Date().getFullYear());
+  const tail = String(envelope?.id || "")
+    .replace(/-/g, "")
+    .slice(0, 6)
+    .toUpperCase();
+  return `${kind}-${year}-${tail}`;
+}
+
+export function coverDetails(envelope, parties, entity, title) {
+  const brokerBits = [
+    entity?.display_name,
+    entity?.legal_name,
+    entity?.company_number ? `Company number ${entity.company_number}` : "",
+  ].filter(Boolean);
+  return {
+    title,
+    contractor: parties?.supplier?.company_name || "",
+    supplier: parties?.spv?.company_name || "",
+    client: parties?.company?.company_name || "",
+    reference: contractReference(envelope, title === "Due diligence pack" ? "DD" : "CT"),
+    broker: brokerBits.join(" · "),
+    brokerOffice: entity?.registered_office || "",
+    version: envelope?.party_shape === "four" ? "4-way" : "3-way",
+    prepared: envelope?.prepared_on ? `Prepared ${envelope.prepared_on}` : "",
+  };
+}
+
+function clean(value) {
+  return String(value || "").replace(/[^\x20-\x7E]/g, " ");
+}
+
+/**
+ * Writes the contract-specific lines onto a broker cover.
+ * The cover artwork stays as uploaded. These lines change with every contract.
+ */
+export function stampCoverDetails(page, font, bold, details) {
+  const { width } = page.getSize();
+  const panelW = Math.min(width - 64, 520);
+  const panelH = 156;
+  const x = 32;
+  const y = 28;
+  page.drawRectangle({
+    x,
+    y,
+    width: panelW,
+    height: panelH,
+    color: rgb(1, 1, 1),
+    opacity: 0.94,
+    borderColor: rgb(0, 0.45, 1),
+    borderWidth: 1.5,
+  });
+  const lines = [
+    { text: details.title || "Contract", size: 13, weight: bold },
+    { text: details.contractor ? `Contractor: ${details.contractor}` : "", size: 10, weight: font },
+    { text: details.supplier ? `Supplier: ${details.supplier}` : "", size: 10, weight: font },
+    { text: details.client ? `Client: ${details.client}` : "", size: 10, weight: font },
+    { text: details.reference ? `Reference: ${details.reference}` : "", size: 10, weight: font },
+    { text: details.broker || "", size: 9, weight: font },
+    { text: details.brokerOffice || "", size: 8, weight: font },
+    { text: [details.version, details.prepared].filter(Boolean).join("  ·  "), size: 8, weight: font },
+  ].filter((line) => line.text);
+  let cursor = y + panelH - 22;
+  for (const line of lines) {
+    page.drawText(clean(line.text).slice(0, 110), {
+      x: x + 12,
+      y: cursor,
+      size: line.size,
+      font: line.weight,
+      color: rgb(0.08, 0.1, 0.14),
+    });
+    cursor -= line.size + 5;
+  }
+}

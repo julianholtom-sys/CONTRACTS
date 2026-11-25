@@ -38,15 +38,15 @@ export default function Companies() {
   return (
     <div>
       <section className="hero-panel">
-        <h1>Companies</h1>
+        <h1>Brokers</h1>
         <p>
-          Sending companies hold legal details and brand packs (covers + logo).
-          Choosing a company on a new contract auto-applies that pack.
+          Each broker has company details, a front cover, a back cover, and a brand
+          SVG. Those files are applied to the contracts that broker sends.
         </p>
       </section>
       <div className="toolbar">
-        <Link className="btn" to="/companies/new">
-          Add company
+        <Link className="btn" to="/brokers/new">
+          Add broker
         </Link>
       </div>
       {error ? <p className="error">{error}</p> : null}
@@ -57,16 +57,13 @@ export default function Companies() {
             className="envelope-row"
             style={{ animationDelay: `${Math.min(i, 8) * 0.04}s` }}
           >
-            <Link to={`/companies/${company.id}`} className="envelope-row-main">
+            <Link to={`/brokers/${company.id}`} className="envelope-row-main">
               <h3>{company.display_name}</h3>
               <div className="meta">
-                {company.legal_name} · {company.company_number} · {company.from_address}
+                {company.legal_name} · {company.company_number}
               </div>
             </Link>
             <div className="envelope-row-actions">
-              <span className={`badge ${company.domain_verified ? "completed" : "draft"}`}>
-                {company.domain_verified ? "verified" : "unverified"}
-              </span>
               <button
                 type="button"
                 className="btn danger"
@@ -82,8 +79,8 @@ export default function Companies() {
       {pending ? (
         <ConfirmDialog
           title="Are you sure?"
-          message={`Delete ${pending.display_name}? It will leave the company catalog. Existing contracts stay on file.`}
-          confirmLabel="Yes, delete company"
+          message={`Delete ${pending.display_name}? It will leave the broker list. Existing contracts stay on file.`}
+          confirmLabel="Yes, delete broker"
           busy={busyId === pending.id}
           onCancel={() => (busyId ? null : setPending(null))}
           onConfirm={confirmDelete}
