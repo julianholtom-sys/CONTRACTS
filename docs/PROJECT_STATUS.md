@@ -40,7 +40,7 @@ Broker setup is where company details, the front cover, the back cover, and the 
 - The library still stores a broker, a contractor, the contract type and the cover. Staff reach it by answering “working from the library” on the start screen, not from a library form in the header.
 - Each party is a company name, signee name, role (Director, or Authorised signatory) and email. The contract has a signature and a date for each party. The broker’s signature on the due diligence pack is that pack’s date.
 - **Delete company** on the list and setup pages, with an in-app **Are you sure?** dialog (Cancel / Yes, delete). Soft-delete (`is_active = 0`); existing contracts stay on file.
-- **Compliance company** — a third party sends the contract on behalf of the broker. The due diligence pack is built and signed in the app, not emailed out for completion. Its details, from address, mailbox, introductory email, and Gmail signature live on the broker’s Compliance company tab (and at Compliance company from the start screen). It has no Companies House number. The intro names the broker it is sent on behalf of, using `{{broker_name}}`. Opening **Good morning** / **Good afternoon** still follows the computer clock. Paste from Gmail Settings → Signature keeps formatted HTML (text, links, fonts, images).
+- **Compliance company** — a third party sends the contract on behalf of the broker. The due diligence pack is built and signed in the app, not emailed out for completion. Its details, from address, mailbox, introductory email, and Gmail signature live on the broker’s Compliance company tab (and at Compliance company from the start screen). It has no Companies House number. The intro names the broker it is sent on behalf of, using `{{broker_name}}`; `{{compliance_name}}` is the compliance company’s own name; `{{other_parties}}` reads “the Contractor and the Client” on a 3-way and “the Contractor, the Supplier and the Client” on a 4-way. The setup page previews both shapes. Opening **Good morning** / **Good afternoon** still follows the computer clock. Paste from Gmail Settings → Signature keeps formatted HTML (text, links, fonts, images).
 
 ### Templates
 
@@ -162,8 +162,8 @@ Rules of the road:
 - [x] Union Payroll broker library record: no longer a sample, name spacing fixed.
 - [x] Client company number: Companies House details fill the client’s contract fields (no documents fetched).
 - [x] Intro email uses `{{broker_name}}` in the body.
-- [ ] The intro email’s first line still reads “I’m Marcus Jameson, Compliance & Contracts Manager for Union Consultancy Solutions Ltd (trading as Union Payroll)”, but the compliance company on file is Certus Check. Ask the user which is right before changing it.
-- [ ] The intro email says “the Client and the Supplier”; check whether “Supplier” there should read Contractor.
+- [x] Intro email opens “I’m Marcus Jameson, Compliance & Contracts Manager of {{compliance_name}} on behalf of {{broker_name}}” (Certus Check on behalf of the broker, user decision 2026-11-25).
+- [x] Intro email names the parties with `{{other_parties}}`: “the Contractor and the Client” on a 3-way, “the Contractor, the Supplier and the Client” on a 4-way (user decision: wording follows the contract shape, one template).
 - [ ] The item 21 test contract is still flagged sample (deliberately, it is test data). Void or delete it before real use.
 - [ ] E Street Management needs its real legal details, covers and logo.
 - [ ] Upload the real Union Payroll master contract to replace the placeholder (its text boxes will then be pre-filled from the party details).

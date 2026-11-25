@@ -82,7 +82,13 @@ export function sendTemplatedEmail({
   if (!tpl) throw new Error(`Missing email template: ${templateType}`);
 
   const compliance = getComplianceCompany();
-  const introText = introForBroker(compliance.intro_email_text, entity.display_name);
+  const partyShape = envelopeId
+    ? db.prepare("SELECT party_shape FROM envelopes WHERE id = ?").get(envelopeId)?.party_shape
+    : undefined;
+  const introText = introForBroker(compliance.intro_email_text, entity.display_name, {
+    complianceName: compliance.display_name,
+    partyShape,
+  });
   const introHtml = introToHtml(introText);
   const subject = renderTemplate(tpl.subject, vars);
   const signatureHtml = String(compliance.email_signature_html || "").trim();

@@ -46,7 +46,11 @@ export default function ComplianceCompany({ brokerName = "", embedded = false })
   }
 
   const previewBroker = brokerName || "the broker";
-  const preview = introForBroker(form.intro_email_text, previewBroker);
+  const [previewShape, setPreviewShape] = useState("three");
+  const preview = introForBroker(form.intro_email_text, previewBroker, {
+    complianceName: form.display_name,
+    partyShape: previewShape,
+  });
 
   async function onSave(event) {
     event.preventDefault();
@@ -174,7 +178,9 @@ export default function ComplianceCompany({ brokerName = "", embedded = false })
 
         <h2>Introductory email</h2>
         <p className="muted">
-          Write {"{{broker_name}}"} where the broker should be named. The greeting
+          Write {"{{broker_name}}"} where the broker should be named and {"{{compliance_name}}"} for
+          this company’s name. {"{{other_parties}}"} reads “the Contractor and the Client” on a 3-way
+          contract and “the Contractor, the Supplier and the Client” on a 4-way. The greeting
           becomes Good morning or Good afternoon from this computer’s clock. If the
           broker’s name is missing, a line is added: this contract and due diligence
           pack are sent on behalf of that broker.
@@ -189,6 +195,13 @@ export default function ComplianceCompany({ brokerName = "", embedded = false })
               "Good morning,\n\nWe are sending the contract and due diligence pack on behalf of {{broker_name}}."
             }
           />
+        </label>
+        <label>
+          Preview as
+          <select value={previewShape} onChange={(e) => setPreviewShape(e.target.value)}>
+            <option value="three">3-way contract</option>
+            <option value="four">4-way contract</option>
+          </select>
         </label>
         <label>
           How it reads for {previewBroker}
