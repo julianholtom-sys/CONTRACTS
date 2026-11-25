@@ -82,8 +82,10 @@ export async function buildDueDiligencePdf(envelopeId) {
 
   writer.newPage();
   writePackDetails(writer, nextPart(), { details, entity, brokerName, templateName, prepared, sources });
+  const partFor = {};
   sources.records.forEach((record, index) => {
-    writeCompany(writer, nextPart(), record, facts[index], letters);
+    partFor[record.roleKey] = nextPart();
+    writeCompany(writer, partFor[record.roleKey], record, facts[index], letters);
   });
   writeDisclosures(writer, nextPart(), facts);
   addCertificate(writer, nextPart(), { entity, broker: sources.byRole.agency, details, sources });
@@ -112,18 +114,31 @@ export async function buildDueDiligencePdf(envelopeId) {
     bold: await scratch.embedFont(StandardFonts.HelveticaBold),
     theme,
   });
-  writeIndex(scratchWriter, placeAttachments(0, attachments));
-  const placed = placeAttachments(out.getPageCount() + scratch.getPageCount() + 1, attachments);
-  writeIndex(writer, placed);
+  const sections = sources.records
+    .map((record) => ({
+      record,
+      letter: partFor[record.roleKey],
+      items: attachments.filter((item) => item.doc.roleKey === record.roleKey),
+    }))
+    .filter((section) => section.items.length);
+  writeIndex(scratchWriter, placeSections(0, sections), letters);
+  const placed = placeSections(out.getPageCount() + scratch.getPageCount() + 1, sections);
+  writeIndex(writer, placed, letters);
 
-  for (const [index, item] of placed.entries()) {
-    await addAnnexPages(out, writer, item, annexLetter(index), fonts);
+  for (const section of placed) {
+    addSectionDivider(writer, section, letters);
+    for (const item of section.items) {
+      await addAnnexPages(out, writer, item, letters[item.doc.key], fonts);
+    }
   }
 
   const footer = `DUE DILIGENCE PACK ${details.reference.split("-")[1] || ""} · ${templateName} · Doc ID: ${details.reference}`;
   const wordmark = wordmarkParts(brokerName);
   const evidencePages = new Set(
-    placed.filter((item) => !item.virtual).flatMap((item) => Array.from({ length: item.pages }, (_, i) => item.start + i)),
+    placed
+      .flatMap((section) => section.items)
+      .filter((item) => !item.virtual)
+      .flatMap((item) => Array.from({ length: item.pages }, (_, i) => item.start + i)),
   );
   for (let index = 1; index < out.getPageCount(); index += 1) {
     const pageNumber = index + 1;
@@ -147,13 +162,26 @@ function localDay() {
   return `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, "0")}-${String(day.getDate()).padStart(2, "0")}`;
 }
 
-function placeAttachments(firstPage, attachments) {
+/** Page numbers for each company's divider page and the annex pages after it. */
+function placeSections(firstPage, sections) {
   let page = firstPage;
-  return attachments.map((item) => {
-    const start = page;
-    page += item.pages;
-    return { ...item, start };
+  return sections.map((section) => {
+    const divider = page;
+    page += 1;
+    const items = section.items.map((item) => {
+      const start = page;
+      page += item.pages;
+      return { ...item, start };
+    });
+    return { ...section, divider, items };
   });
+}
+
+const sectionTitle = (section) => `Part ${section.letter} — ${section.record.label}: ${section.record.companyName}`;
+
+function pageRange(item) {
+  const end = item.start + item.pages - 1;
+  return end > item.start ? `${item.start}–${end}` : String(item.start);
 }
 
 async function addBackCover(out, back) {
@@ -264,11 +292,11 @@ function writeCompany(writer, letter, record, fact, letters) {
   writer.sub(`${letter}4  Checks`);
   writer.table(
     [
-      { label: "Check", width: CONTENT_W - 150 },
-      { label: "Result", width: 90 },
-      { label: "Annex", width: 60 },
+      { label: "Check", width: CONTENT_W - 110 },
+      { label: "Result", width: 50, align: "center" },
+      { label: "Annex", width: 60, align: "center" },
     ],
-    fact.declarations.map(([result, text, annex]) => [text, { yesNo: result === "Yes" }, annex || "—"])
+    fact.declarations.map(([result, text, annex]) => [text, { check: result === "Yes" }, annex || "—"])
   );
 }
 
@@ -528,30 +556,59 @@ function annexLetter(index) {
   return label;
 }
 
-function writeIndex(writer, placed) {
+function writeIndex(writer, sections, letters) {
   writer.newPage();
   writer.part("Annex index");
-  writer.table(
-    [
-      { label: "Annex", width: 36 },
-      { label: "Document", width: 196 },
-      { label: "Company", width: 107 },
-      { label: "Pages", width: 40 },
-      { label: "Received", width: 52 },
-      { label: "Checked", width: CONTENT_W - 431 },
-    ],
-    placed.map((item, index) => {
-      const end = item.start + item.pages - 1;
-      return [
-        { text: annexLetter(index), bold: true },
+  for (const section of sections) {
+    writer.sub(sectionTitle(section));
+    writer.table(
+      [
+        { label: "Annex", width: 40, align: "center" },
+        { label: "Document", width: CONTENT_W - 220 },
+        { label: "Pages", width: 50, align: "center" },
+        { label: "Received", width: 65, align: "center" },
+        { label: "Checked", width: 65, align: "center" },
+      ],
+      section.items.map((item) => [
+        { text: letters[item.doc.key], bold: true },
         item.doc.label,
-        item.doc.companyName,
-        end > item.start ? `${item.start}–${end}` : String(item.start),
+        pageRange(item),
         ukDate(item.doc.receivedOn) || "—",
         ukDate(item.doc.checkedOn) || "—",
-      ];
-    }),
-    { size: 8 }
+      ]),
+      { size: 8 }
+    );
+  }
+}
+
+/** Leading page for one company's evidence, headed like its Part in the body and in the index. */
+function addSectionDivider(writer, section, letters) {
+  const { font, bold, theme } = writer;
+  const page = writer.newPage();
+  const { record } = section;
+  const first = letters[section.items[0].doc.key];
+  const last = letters[section.items[section.items.length - 1].doc.key];
+  let y = 650;
+  const line = (text, size, face, color, gap) => {
+    for (const row of wrapText(text, face, size, CONTENT_W)) {
+      page.drawText(row, { x: MARGIN, y, size, font: face, color });
+      y -= size + gap;
+    }
+  };
+  line(first === last ? `EVIDENCE · ANNEX ${first}` : `EVIDENCE · ANNEXES ${first}–${last}`, 9, bold, theme.muted, 24);
+  line(`PART ${section.letter} — ${record.label.toUpperCase()}`, 26, bold, theme.accent, 10);
+  line(record.companyName, 18, bold, theme.ink, 8);
+  if (record.companyNumber) line(`Company number ${record.companyNumber}`, 10, font, theme.muted, 6);
+  page.drawRectangle({ x: MARGIN, y: y - 4, width: 80, height: 3, color: theme.accent });
+  writer.y = y - 30;
+  writer.table(
+    [
+      { label: "Annex", width: 40, align: "center" },
+      { label: "Document", width: CONTENT_W - 90 },
+      { label: "Pages", width: 50, align: "center" },
+    ],
+    section.items.map((item) => [{ text: letters[item.doc.key], bold: true }, item.doc.label, pageRange(item)]),
+    { size: 8.5 }
   );
 }
 

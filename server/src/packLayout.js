@@ -1,4 +1,5 @@
 import {
+  LineCapStyle,
   PDFArray,
   PDFDocument,
   PDFEmbeddedPage,
@@ -70,7 +71,8 @@ export function packTheme(entity) {
     ink: rgb(0.1, 0.12, 0.16),
     muted: rgb(0.42, 0.46, 0.52),
     rule: rgb(0.76, 0.79, 0.83),
-    alert: rgb(0.75, 0.1, 0.1),
+    alert: rgb(0.8, 0.1, 0.1),
+    ok: rgb(0.05, 0.6, 0.25),
   };
 }
 
@@ -173,8 +175,8 @@ export class PackWriter {
   }
 
   /**
-   * Bordered table. Columns are { label, width } with widths summing to the content width.
-   * A cell is a string, { text, bold, color }, or { yesNo: boolean }.
+   * Bordered table. Columns are { label, width, align? } with widths summing to the content width.
+   * A cell is a string, { text, bold, color }, or { check: boolean } for a tick or a cross.
    */
   table(columns, rows, { header = true, labelColumn = false, size = 8.5 } = {}) {
     const pad = 5;
@@ -188,7 +190,7 @@ export class PackWriter {
       isHeader || (typeof cell === "object" && cell?.bold) || (labelColumn && index === 0) ? this.bold : this.font;
     const layout = (cells, isHeader) => {
       const lines = cells.map((cell, index) =>
-        cell && typeof cell === "object" && "yesNo" in cell
+        cell && typeof cell === "object" && "check" in cell
           ? [""]
           : wrapText(typeof cell === "object" && cell ? cell.text : cell ?? "", faceFor(cell, index, isHeader), size, columns[index].width - pad * 2)
       );
@@ -207,17 +209,18 @@ export class PackWriter {
           borderColor: this.theme.rule,
           borderWidth: 0.6,
         });
-        if (cell && typeof cell === "object" && "yesNo" in cell) {
-          this.yesNo(xs[index] + pad, top - pad - size + 1, cell.yesNo, size);
+        if (cell && typeof cell === "object" && "check" in cell) {
+          this.checkMark(xs[index] + columns[index].width / 2, top - height / 2, cell.check, size + 2);
           return;
         }
         const color = (typeof cell === "object" && cell?.color) || this.theme.ink;
+        const face = faceFor(cell, index, isHeader);
         lines[index].forEach((line, n) => {
-          this.draw(line, xs[index] + pad, top - pad - size + 1 - n * lineH, {
-            size,
-            font: faceFor(cell, index, isHeader),
-            color,
-          });
+          const x =
+            columns[index].align === "center"
+              ? xs[index] + (columns[index].width - face.widthOfTextAtSize(packText(line), size)) / 2
+              : xs[index] + pad;
+          this.draw(line, x, top - pad - size + 1 - n * lineH, { size, font: face, color });
         });
       });
       this.y -= height;
@@ -238,20 +241,23 @@ export class PackWriter {
     this.y -= 12;
   }
 
-  yesNo(x, baseline, value, size) {
-    const box = size - 1;
-    const mark = (bx, checked) => {
-      this.page.drawRectangle({ x: bx, y: baseline - 1, width: box, height: box, borderColor: this.theme.ink, borderWidth: 0.6 });
-      if (!checked) return;
-      const color = value ? this.theme.ink : this.theme.alert;
-      this.page.drawLine({ start: { x: bx + 1.5, y: baseline + 0.5 }, end: { x: bx + box - 1.5, y: baseline + box - 2.5 }, thickness: 0.9, color });
-      this.page.drawLine({ start: { x: bx + 1.5, y: baseline + box - 2.5 }, end: { x: bx + box - 1.5, y: baseline + 0.5 }, thickness: 0.9, color });
-    };
-    mark(x, value);
-    this.draw("Yes", x + box + 3, baseline, { size, color: this.theme.ink });
-    const noX = x + box + 3 + this.font.widthOfTextAtSize("Yes", size) + 10;
-    mark(noX, !value);
-    this.draw("No", noX + box + 3, baseline, { size, color: value ? this.theme.ink : this.theme.alert });
+  /** A bold green tick for a passed check, a red cross for a failed one, centred on (cx, cy). */
+  checkMark(cx, cy, passed, size) {
+    const line = (x1, y1, x2, y2, color) =>
+      this.page.drawLine({
+        start: { x: cx + x1 * size, y: cy + y1 * size },
+        end: { x: cx + x2 * size, y: cy + y2 * size },
+        thickness: size * 0.19,
+        color,
+        lineCap: LineCapStyle.Round,
+      });
+    if (passed) {
+      line(-0.42, 0.02, -0.12, -0.3, this.theme.ok);
+      line(-0.12, -0.3, 0.45, 0.36, this.theme.ok);
+    } else {
+      line(-0.32, -0.32, 0.32, 0.32, this.theme.alert);
+      line(-0.32, 0.32, 0.32, -0.32, this.theme.alert);
+    }
   }
 }
 
