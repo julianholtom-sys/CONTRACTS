@@ -46,16 +46,45 @@ export function pdfText(value) {
 
 const clean = pdfText;
 
+function wrapLine(text, font, size, width) {
+  const rows = [];
+  let row = "";
+  for (const word of clean(text).split(/\s+/).filter(Boolean)) {
+    const next = row ? `${row} ${word}` : word;
+    if (row && font.widthOfTextAtSize(next, size) > width) {
+      rows.push(row);
+      row = word;
+    } else {
+      row = next;
+    }
+  }
+  if (row) rows.push(row);
+  return rows;
+}
+
 /**
- * Writes the contract-specific lines onto a broker cover.
- * The cover artwork stays as uploaded. These lines change with every contract.
+ * Writes the contract-specific lines onto a broker cover that has no details panel of its own.
+ * The panel sits in the bottom-right quarter so the cover artwork stays visible.
  */
 export function stampCoverDetails(page, font, bold, details) {
   const { width } = page.getSize();
-  const panelW = Math.min(width - 64, 520);
-  const panelH = 156;
-  const x = 32;
+  const x = width / 2 + 8;
   const y = 28;
+  const panelW = width - x - 28;
+  const pad = 12;
+  const lines = [
+    { text: details.title || "Contract", size: 12, weight: bold },
+    { text: details.contractor ? `Contractor: ${details.contractor}` : "", size: 9, weight: font },
+    { text: details.supplier ? `Supplier: ${details.supplier}` : "", size: 9, weight: font },
+    { text: details.client ? `Client: ${details.client}` : "", size: 9, weight: font },
+    { text: details.reference ? `Reference: ${details.reference}` : "", size: 9, weight: font },
+    { text: details.broker || "", size: 7.5, weight: font },
+    { text: details.brokerOffice || "", size: 7.5, weight: font },
+    { text: [details.version, details.prepared].filter(Boolean).join("  ·  "), size: 7.5, weight: font },
+  ]
+    .filter((line) => line.text)
+    .flatMap((line) => wrapLine(line.text, line.weight, line.size, panelW - pad * 2).map((text) => ({ ...line, text })));
+  const panelH = pad * 2 + lines.reduce((sum, line) => sum + line.size + 4, 0);
   page.drawRectangle({
     x,
     y,
@@ -65,25 +94,15 @@ export function stampCoverDetails(page, font, bold, details) {
     borderColor: rgb(0, 0.45, 1),
     borderWidth: 1.5,
   });
-  const lines = [
-    { text: details.title || "Contract", size: 13, weight: bold },
-    { text: details.contractor ? `Contractor: ${details.contractor}` : "", size: 10, weight: font },
-    { text: details.supplier ? `Supplier: ${details.supplier}` : "", size: 10, weight: font },
-    { text: details.client ? `Client: ${details.client}` : "", size: 10, weight: font },
-    { text: details.reference ? `Reference: ${details.reference}` : "", size: 10, weight: font },
-    { text: details.broker || "", size: 9, weight: font },
-    { text: details.brokerOffice || "", size: 8, weight: font },
-    { text: [details.version, details.prepared].filter(Boolean).join("  ·  "), size: 8, weight: font },
-  ].filter((line) => line.text);
-  let cursor = y + panelH - 22;
+  let cursor = y + panelH - pad - lines[0].size;
   for (const line of lines) {
-    page.drawText(clean(line.text).slice(0, 110), {
-      x: x + 12,
+    page.drawText(line.text, {
+      x: x + pad,
       y: cursor,
       size: line.size,
       font: line.weight,
       color: rgb(0.08, 0.1, 0.14),
     });
-    cursor -= line.size + 5;
+    cursor -= line.size + 4;
   }
 }

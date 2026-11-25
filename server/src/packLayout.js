@@ -281,7 +281,38 @@ export function placeInBody(page, embedded, { top, bottom, rotation = 0, rule })
   page.drawRectangle({ x: left, y: base, width: w, height: h, borderColor: rule, borderWidth: 0.6 });
 }
 
-function stripPageText(doc, page) {
+const NUM = "[-+]?(?:\\d+\\.?\\d*|\\.\\d+)";
+const MATRIX = `((?:${NUM}\\s+){6})`;
+const STRING = "\\((?:\\\\[\\s\\S]|[^()\\\\])*\\)|<[0-9A-Fa-f\\s]*>";
+const SHOW_TEXT = new RegExp(
+  `\\[(?:${STRING}|[^\\]()<>])*\\]\\s*TJ|(?:${STRING})\\s*(?:Tj|')|${NUM}\\s+${NUM}\\s+(?:${STRING})\\s*"`,
+  "g",
+);
+const CONTENT_TOKEN = new RegExp(
+  `(^|\\s)BI\\s[\\s\\S]*?\\sID\\s[\\s\\S]*?\\sEI(?=\\s|$)|(^|\\s)BT\\s([\\s\\S]*?)\\sET(?=\\s|$)|(?:^|\\s)(q|Q)(?=\\s|$)|${MATRIX}cm(?=\\s|$)`,
+  "g",
+);
+const IDENTITY = [1, 0, 0, 1, 0, 0];
+
+function multiply(m, c) {
+  return [
+    m[0] * c[0] + m[1] * c[2],
+    m[0] * c[1] + m[1] * c[3],
+    m[2] * c[0] + m[3] * c[2],
+    m[2] * c[1] + m[3] * c[3],
+    m[4] * c[0] + m[5] * c[2] + c[4],
+    m[4] * c[1] + m[5] * c[3] + c[5],
+  ];
+}
+
+const numbers = (text) => text.trim().split(/\s+/).map(Number);
+
+/**
+ * Removes the words from a page and leaves its artwork. Each text object is located by its
+ * first text matrix; `keep(x, y)` keeps the ones that should stay. Font and spacing operators
+ * are left in place so any kept text still draws with the state it expects.
+ */
+function stripPageText(doc, page, keep = () => false) {
   const contents = page.node.Contents();
   if (!contents) return;
   const streams =
@@ -293,7 +324,20 @@ function stripPageText(doc, page) {
       )
     )
     .join("\n");
-  const cleaned = source.replace(/(^|\s)BT\s[\s\S]*?\sET(?=\s|$)/g, "$1");
+  let ctm = IDENTITY;
+  const saved = [];
+  const cleaned = source.replace(CONTENT_TOKEN, (match, imageLead, lead, body, state, cm) => {
+    if (state === "q") saved.push(ctm);
+    else if (state === "Q") ctm = saved.pop() || IDENTITY;
+    else if (cm) ctm = multiply(numbers(cm), ctm);
+    if (body == null) return match;
+    const tm = body.match(new RegExp(`${MATRIX}Tm`));
+    const td = body.match(new RegExp(`(${NUM})\\s+(${NUM})\\s+T[dD]`));
+    const [x, y] = tm ? numbers(tm[1]).slice(4) : td ? [Number(td[1]), Number(td[2])] : [0, 0];
+    const at = multiply([1, 0, 0, 1, x, y], ctm);
+    if (keep(at[4], at[5])) return match;
+    return `${lead}BT ${body.replace(SHOW_TEXT, " ")} ET`;
+  });
   page.node.set(PDFName.of("Contents"), doc.context.register(doc.context.flateStream(Buffer.from(cleaned, "latin1"))));
 }
 
@@ -334,9 +378,9 @@ function drawTracked(page, text, { x, y, size, font, color, tracking }) {
 }
 
 /**
- * Builds the pack cover from the broker's front cover: the artwork stays, its own words are
- * removed, and the pack title and details are set where the cover's title and text blocks were.
- * Returns false when the cover has no live text to replace, so the caller can draw a plain cover.
+ * Builds a cover from the broker's front cover: the artwork stays, its own words are removed,
+ * and the details are set where the cover's text blocks were. With no `content.title` the
+ * cover's own title is kept. Returns false when the cover has no details panel to fill.
  */
 export async function addBrandedCover(out, frontAsset, { font, bold, theme }, content) {
   if (!frontAsset) return false;
@@ -375,39 +419,45 @@ export async function addBrandedCover(out, frontAsset, { font, bold, theme }, co
   const lower = heading ? blocks.slice(1).filter((block) => block.top < heading.bottom).sort((a, b) => a.x - b.x) : [];
   if (!heading || !lower.length || heading.top > titleBottom) return false;
 
+  const keepTitle = !content.title;
+  const isTitle = (x, y) => titleItems.some((item) => Math.abs(item.x - x) < 1.5 && Math.abs(item.y - y) < 1.5);
   const src = await PDFDocument.load(bytes);
-  stripPageText(src, src.getPage(0));
+  stripPageText(src, src.getPage(0), keepTitle ? isTitle : undefined);
   const stripped = await src.save();
   const [after] = await extractTextItems(stripped);
-  if (after?.items?.length) return false;
+  const remaining = after?.items || [];
+  if (remaining.length !== (keepTitle ? titleItems.length : 0)) return false;
+  if (!remaining.every((item) => isTitle(item.x, item.y))) return false;
   const [page] = await out.copyPages(await PDFDocument.load(stripped), [0]);
   out.addPage(page);
   const { width } = page.getSize();
-  const white = rgb(1, 1, 1);
 
-  const unit = trackedWidth(content.title, bold, 1, 0.08);
-  const titleSize = Math.min(tallest * 0.85, (width * 0.74) / unit);
-  const subSize = titleSize * 0.3;
-  const titleTracking = titleSize * 0.08;
-  const subTracking = subSize * 0.12;
-  const blockH = titleSize * 0.72 + titleSize * 0.28 + subSize * 0.72;
-  const titleBase = centerY + blockH / 2 - titleSize * 0.72;
-  drawTracked(page, content.title, {
-    x: centerX - trackedWidth(content.title, bold, titleSize, titleTracking) / 2,
-    y: titleBase,
-    size: titleSize,
-    font: bold,
-    color: white,
-    tracking: titleTracking,
-  });
-  drawTracked(page, content.subtitle, {
-    x: centerX - trackedWidth(content.subtitle, bold, subSize, subTracking) / 2,
-    y: titleBase - titleSize * 0.28 - subSize * 0.72,
-    size: subSize,
-    font: bold,
-    color: white,
-    tracking: subTracking,
-  });
+  if (!keepTitle) {
+    const white = rgb(1, 1, 1);
+    const unit = trackedWidth(content.title, bold, 1, 0.08);
+    const titleSize = Math.min(tallest * 0.85, (width * 0.74) / unit);
+    const subSize = titleSize * 0.3;
+    const titleTracking = titleSize * 0.08;
+    const subTracking = subSize * 0.12;
+    const blockH = titleSize * 0.72 + titleSize * 0.28 + subSize * 0.72;
+    const titleBase = centerY + blockH / 2 - titleSize * 0.72;
+    drawTracked(page, content.title, {
+      x: centerX - trackedWidth(content.title, bold, titleSize, titleTracking) / 2,
+      y: titleBase,
+      size: titleSize,
+      font: bold,
+      color: white,
+      tracking: titleTracking,
+    });
+    drawTracked(page, content.subtitle, {
+      x: centerX - trackedWidth(content.subtitle, bold, subSize, subTracking) / 2,
+      y: titleBase - titleSize * 0.28 - subSize * 0.72,
+      size: subSize,
+      font: bold,
+      color: white,
+      tracking: subTracking,
+    });
+  }
 
   const legal = lower[0];
   const meta = lower.find((block) => block !== legal && block.x > (legal?.x ?? 0));

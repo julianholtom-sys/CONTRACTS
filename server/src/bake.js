@@ -1,5 +1,6 @@
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import { coverDetails, stampCoverDetails, ukDate } from "./coverStamp.js";
+import { addBrandedCover, packTheme } from "./packLayout.js";
 import { db, newId, now, sha256, parseJson } from "./db.js";
 import { appendEvent } from "./events.js";
 import { readBytes, writeBytes } from "./storage.js";
@@ -249,27 +250,42 @@ export async function bakeEnvelope(envelopeId, { actor = "system" } = {}) {
 
     const frontDoc = await pdfFromAsset(brand.front);
     if (frontDoc) {
-      const pages = await bakedDoc.copyPages(frontDoc, frontDoc.getPageIndices());
-      pages.forEach((p) => bakedDoc.addPage(p));
-      const parties = db
-        .prepare(
-          `SELECT p.company_name, r.role_key
-           FROM envelope_parties p
-           JOIN template_roles r ON r.id = p.role_id
-           WHERE p.envelope_id = ?`
-        )
-        .all(envelopeId);
-      stampCoverDetails(
-        bakedDoc.getPages()[0],
-        font,
-        bold,
-        coverDetails(
-          envelope,
-          Object.fromEntries(parties.map((party) => [party.role_key, party])),
-          entity,
-          "Contract"
-        )
+      const details = coverDetails(
+        envelope,
+        Object.fromEntries(parties.map((party) => [party.role_key, party])),
+        entity,
+        "Contract"
       );
+      const brokerName = entity.display_name || "the broker";
+      const branded = await addBrandedCover(
+        bakedDoc,
+        brand.front,
+        { font, bold, theme: packTheme(entity) },
+        {
+          brand: brokerName.toUpperCase(),
+          packTitle: template.name,
+          forUse: `${details.version} contract`,
+          parties: [
+            ["Contractor", details.contractor || "—"],
+            ...(details.supplier ? [["Supplier", details.supplier]] : []),
+            ["Client", details.client || "—"],
+          ],
+          legal: [
+            brokerName,
+            ...(entity.legal_name && entity.legal_name !== brokerName ? [entity.legal_name] : []),
+            ...(entity.company_number ? [`Company number ${entity.company_number}`] : []),
+            ...(entity.registered_office ? [`Registered office: ${entity.registered_office}`] : []),
+          ],
+          meta: [
+            ["Prepared", envelope.prepared_on ? ukDate(envelope.prepared_on) : "—"],
+            ["Doc ID", details.reference],
+          ],
+        }
+      );
+      const indices = frontDoc.getPageIndices().slice(branded ? 1 : 0);
+      const pages = await bakedDoc.copyPages(frontDoc, indices);
+      pages.forEach((p) => bakedDoc.addPage(p));
+      if (!branded) stampCoverDetails(bakedDoc.getPages()[0], font, bold, details);
     }
 
     const contractDoc = await PDFDocument.load(readBytes(version.storage_ref));
