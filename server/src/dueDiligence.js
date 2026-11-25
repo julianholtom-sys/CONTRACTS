@@ -6,7 +6,7 @@ import { DD_REQUIREMENTS, OFFICE_CHANGE_ITEM, PARTY_LABELS } from "./parties.js"
 import { packSources } from "./partyRecords.js";
 import { buildDueDiligencePdf, CERTIFICATE_SIGNATURE } from "./ddPack.js";
 import { pdfText, ukDate } from "./coverStamp.js";
-import { describeSignature } from "./signatureInput.js";
+import { SIGNATURE_MAX_HEIGHT, describeSignature } from "./signatureInput.js";
 
 const ACCEPTED = ["application/pdf", "image/jpeg", "image/png"];
 
@@ -460,7 +460,11 @@ export async function signDueDiligence(envelopeId, {
   if (certIndex >= 0 && certIndex < pdf.getPageCount()) {
     const page = pdf.getPage(certIndex);
     const box = CERTIFICATE_SIGNATURE;
-    const scale = Math.min((box.w - 16) / image.width, (box.h - 12) / image.height, 1);
+    const scale = Math.min(
+      (box.w - 16) / image.width,
+      Math.min(box.h - 12, SIGNATURE_MAX_HEIGHT) / image.height,
+      1
+    );
     page.drawImage(image, {
       x: box.x + 8,
       y: box.y + (box.h - image.height * scale) / 2,
@@ -522,7 +526,7 @@ async function appendSignaturePage(pdf, { envelope, party, image, font, bold, si
     });
     textY -= 18;
   }
-  const scale = Math.min(240 / image.width, 90 / image.height, 1);
+  const scale = Math.min(240 / image.width, SIGNATURE_MAX_HEIGHT / image.height, 1);
   page.drawImage(image, {
     x: 48,
     y: 620,

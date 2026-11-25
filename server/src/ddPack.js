@@ -439,7 +439,7 @@ function companyFacts(record, documents, letters, today) {
 const CERT_TOP = 500;
 const CERT_LABEL_W = 150;
 const CERT_ROW = 22;
-const CERT_SIGNATURE_ROW = 92;
+const CERT_SIGNATURE_ROW = 52;
 
 /** Where signing stamps the signature, the date and the evidence lines on the certificate page. */
 export const CERTIFICATE_SIGNATURE = {

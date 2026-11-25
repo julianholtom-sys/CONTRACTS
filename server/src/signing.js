@@ -8,6 +8,7 @@ import { envelopePlacedFields, fieldsForParty } from "./documentFields.js";
 import { buildAuditCertificate } from "./auditCertificate.js";
 import { FINAL_EVIDENCE } from "./parties.js";
 import { assertClientMayBeInvited, assertContractMayBeIssued } from "./dueDiligence.js";
+import { SIGNATURE_MAX_HEIGHT } from "./signatureInput.js";
 
 const CONSENT_TEXT =
   "I agree to sign this document electronically. I understand that my electronic signature is as legally binding as a handwritten signature.";
@@ -517,7 +518,7 @@ export async function finalizeEnvelope(envelopeId) {
         : pageOffset + (field.page || 0);
       const page = pages[Math.min(pageIndex, pages.length - 1)];
       const box = { x: Number(field.x), y: Number(field.y), w: Number(field.w), h: Number(field.h) };
-      const scale = Math.min(box.w / image.width, box.h / image.height);
+      const scale = Math.min(box.w / image.width, Math.min(box.h, SIGNATURE_MAX_HEIGHT) / image.height);
       const height = image.height * scale;
       page.drawImage(image, {
         x: box.x,
