@@ -173,7 +173,7 @@ async function detectAcroForm(bytes) {
   return out;
 }
 
-async function extractTextItems(bytes) {
+export async function extractTextItems(bytes) {
   const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
   try {
     const workerPath = require.resolve("pdfjs-dist/legacy/build/pdf.worker.mjs");

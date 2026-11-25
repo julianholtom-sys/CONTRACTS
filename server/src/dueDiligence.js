@@ -468,15 +468,15 @@ export async function signDueDiligence(envelopeId, {
       height: image.height * scale,
     });
     const ink = rgb(0.1, 0.12, 0.16);
-    page.drawText(pdfText(ukDate(signedAt)), { x: box.x + 34, y: box.y - 52, size: 11, font: bold, color: ink });
+    page.drawText(pdfText(ukDate(signedAt)), { x: box.dateX, y: box.dateY, size: 9, font: bold, color: ink });
     const evidence = [
       `Signed by ${signerName} in Contract Builder at ${ukDate(signedAt)} ${signedAt.slice(11, 19)} UTC`,
       `${describeSignature(signature.method, signature.font)} · IP ${ip || "—"} · ${party.signer_email}`,
     ];
     evidence.forEach((line, i) => {
       page.drawText(pdfText(line), {
-        x: box.x,
-        y: box.y - 70 - i * 11,
+        x: box.evidenceX,
+        y: box.evidenceY - i * 11,
         size: 8,
         font,
         color: rgb(0.38, 0.42, 0.48),
