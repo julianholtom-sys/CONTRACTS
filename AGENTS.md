@@ -40,6 +40,10 @@ Use the latest **Claude Opus** for product work on this app, with thinking on. U
 
 **Use `main` on GitHub** (`github.com/julianholtom-sys/CONTRACTS`, remote `origin`). That is the live copy; pull it before editing and push to it after each change. The Cursor-hosted copy (`origin.cursor.com/julian-holtom/attest`) is retired at 19 Oct 2026. Company setup, master+appendices, Union Payroll brand, tunnel scripts, and continuity docs are merged there. See `docs/PROJECT_STATUS.md` for detail. Older feature PRs #4/#5/#6 tip are historical.
 
+## Versions
+
+`v1.0` (25 Nov 2026) is the hard roll-back point: git tag and GitHub release on `main`. Roll back with `git revert --no-commit v1.0..HEAD` and a normal commit, never a force-push. See `docs/PROJECT_STATUS.md` for the matching data snapshot.
+
 ## Continuity rule for agents
 
 When ending a meaningful chunk of work: refresh `docs/PROJECT_STATUS.md` (what changed, what’s next, how to run/demo), commit, push. That is the cross-device source of truth—not chat history alone.

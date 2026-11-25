@@ -17,6 +17,12 @@ Local Attest e-sign app implementing the three-party data model from `docs/esign
 
 Parent brand / sending company context: **Union Payroll** — https://union-payroll.ltd/
 
+## Versions
+
+- **v1.0** (25 Nov 2026): hard roll-back point. Git tag `v1.0` on `main`, with a GitHub release of the same name; packages are 1.0.0. It includes the redesigned due diligence pack (green tick / red cross checks, a divider page per company, CLEAN in green, signature cap), the contract cover details in the bottom-right quarter, and received and checked dates set per company.
+- To look at it: `git checkout v1.0`. To put `main` back to it without rewriting history: `git revert --no-commit v1.0..HEAD`, then commit and push (never force-push).
+- The database and uploaded files are not in git. A snapshot of `server/data` taken at v1.0 is on the Windows PC at `C:\Users\Shadow\Documents\Attest-backups\v1.0\data`. It holds the SMTP credentials, so never commit it. To restore: stop the server, then copy it over `server/data`.
+
 ## Working product model
 
 ### Start
