@@ -284,17 +284,14 @@ export default function CreateEnvelope() {
                 records={contractors}
                 showCompanyNumber
               />
-              <p className="muted">
-                VAT, insurance, the bank statement, the payslip and the payroll chain are added on the contractor record. Companies House is fetched from the company number.
-              </p>
+              <p className="muted">VAT, insurance, bank, payslip and payroll chain documents are on the contractor record.</p>
             </section>
           ) : null}
           <section className="party-card">
             <h3>Client</h3>
             <PartyFields value={client} onChange={mergeParty(setClient)} records={clients} lookup />
             <p className="muted">
-              The company number fills in the client’s details from Companies House. The client uploads their own
-              incorporation certificate, VAT certificate and director ID when they sign.
+              The client uploads its incorporation certificate, VAT certificate and director ID when signing.
             </p>
           </section>
           {shape === "four" ? (

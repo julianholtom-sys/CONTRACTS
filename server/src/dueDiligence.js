@@ -424,7 +424,7 @@ export function submitDueDiligence(envelopeId, roleKey, partyId = null) {
 }
 
 const DD_CONSENT =
-  "I have checked the contents of this due diligence pack and I am satisfied with it. My signature here signs the director's certificate in the pack.";
+  "I have checked this due diligence pack and sign its director's certificate.";
 
 export async function signDueDiligence(envelopeId, {
   partyId,

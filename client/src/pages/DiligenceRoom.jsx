@@ -63,17 +63,14 @@ export default function DiligenceRoom() {
           ) : (
             <section className="panel">
               <h2>Pack not ready</h2>
-              <p>
-                The documents are still being collected. You can review and sign
-                once every party has submitted the documents requested from them.
-              </p>
+              <p>The pack has not been compiled yet.</p>
             </section>
           )}
           <section className="panel form-grid">
             <h2>Sign the due diligence pack</h2>
             {session.signed ? (
               <p>
-                {`You signed this pack${session.signedAt ? ` on ${new Date(session.signedAt).toLocaleString("en-GB")}` : ""}. That signature confirms you checked the contents and are satisfied with them, and signs the director’s certificate.`}
+                {`You signed this pack${session.signedAt ? ` on ${new Date(session.signedAt).toLocaleString("en-GB")}` : ""}.`}
               </p>
             ) : (
               <>
@@ -85,7 +82,7 @@ export default function DiligenceRoom() {
                     checked={consent}
                     onChange={(e) => setConsent(e.target.checked)}
                   />
-                  <span>I have checked this pack, I am satisfied with it, and I sign the director’s certificate</span>
+                  <span>I have checked this pack and sign the director’s certificate</span>
                 </label>
                 <button
                   type="button"
@@ -113,20 +110,12 @@ export default function DiligenceRoom() {
         <section className="panel form-grid">
           <h2>Documents requested from you</h2>
           {section.heldOnRecord ? (
-            <p>
-              Company filings are fetched from the company number, and the other
-              documents are held on the company record. The broker enters the
-              received and checked dates when this contract is issued.
-            </p>
+            <p>These documents are held on the company record.</p>
           ) : null}
           {section.heldOnRecord ? null : (
           <>
           {section.roleKey === "company" ? (
-            <p className="muted">
-              The client does not supply the body of the pack. If the company
-              has changed its name, add each change and upload the certificate
-              and resolution. If it has not changed name, submit with none listed.
-            </p>
+            <p className="muted">Add each change of name with its certificate. If none, submit as is.</p>
           ) : (
             <p className="muted">
               Upload each document below. Add a certificate for every name change.

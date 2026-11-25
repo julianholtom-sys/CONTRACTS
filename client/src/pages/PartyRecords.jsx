@@ -8,15 +8,13 @@ const COPY = {
     title: "Contractors",
     one: "Contractor",
     path: "/contractors",
-    intro:
-      "Add the company number and the documents Companies House does not hold. The company filings and the sanctions check are fetched from the company number.",
+    intro: "Add the company number and the documents Companies House does not hold.",
   },
   supplier: {
     title: "Suppliers",
     one: "Supplier",
     path: "/suppliers",
-    intro:
-      "Add the company number, the HMRC PAYE letter, and the Employers’ Liability documents. Company filings and the sanctions check are fetched from the company number.",
+    intro: "Add the company number, the HMRC PAYE letter and the Employers’ Liability documents.",
   },
 };
 
@@ -134,7 +132,7 @@ function PartyEditor({ kind, copy, id }) {
       setNotice(
         saved.registry?.error
           ? `Fetched with a warning: ${saved.registry.error}`
-          : "Companies House filings and the sanctions check are on this record."
+          : "Updated."
       );
     } catch (err) {
       setNotice("");
@@ -226,7 +224,7 @@ function PartyEditor({ kind, copy, id }) {
           <section className="panel" style={{ marginTop: "1rem" }}>
             <h2>Companies House and sanctions</h2>
             <p className="muted">
-              The company number is enough. Incorporation, changes of name, registered-office filings, the PSC notice and the current directors are fetched, and the company and its directors are checked against the UK Sanctions List.
+              Fetches the incorporation, name changes, latest registered office, current PSC notices, directors and a sanctions search.
             </p>
             {record.registry?.fetched_at ? (
               <p className="meta">

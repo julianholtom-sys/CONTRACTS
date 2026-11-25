@@ -34,7 +34,8 @@ export async function buildDueDiligencePdf(envelopeId) {
     ? db.prepare("SELECT name FROM templates WHERE id = ?").get(envelope.template_id)
     : null;
   await addCover(narrative, brand.logo, font, bold, details, entity, template?.name || "");
-  writeNarrative(narrative, font, bold, envelope, entity, sources, details);
+  const letters = Object.fromEntries(sources.documents.map((doc, index) => [doc.key, annexLetter(index)]));
+  writeNarrative(narrative, font, bold, sources, details, letters);
   const certPage = addCertificate(narrative, font, bold, {
     entity,
     broker: sources.byRole.agency,
@@ -52,7 +53,9 @@ export async function buildDueDiligencePdf(envelopeId) {
     const isPdf = bytes.slice(0, 5).toString() === "%PDF-";
     if (isPdf) {
       const src = await PDFDocument.load(bytes);
-      attachments.push({ doc, bytes, pages: src.getPageCount(), virtual: false });
+      // A Companies House filing's first page is the certificate or notice; the rest is the application and articles.
+      const indices = doc.source === "companies_house" ? [0] : src.getPageIndices();
+      attachments.push({ doc, bytes, indices, pages: indices.length, virtual: false });
     } else {
       attachments.push({ doc, bytes, pages: 1, virtual: false, image: true });
     }
@@ -78,7 +81,7 @@ export async function buildDueDiligencePdf(envelopeId) {
       await addImagePage(out, item);
     } else {
       const src = await PDFDocument.load(item.bytes);
-      const pages = await out.copyPages(src, src.getPageIndices());
+      const pages = await out.copyPages(src, item.indices);
       pages.forEach((page) => out.addPage(page));
     }
   }
@@ -164,7 +167,7 @@ async function addBackCover(out, back) {
   return 1;
 }
 
-function writeNarrative(doc, font, bold, envelope, entity, sources, details) {
+function writeNarrative(doc, font, bold, sources, details, letters) {
   const cursor = { y: 0, page: null };
   const fresh = () => {
     cursor.page = doc.addPage([595.28, 841.89]);
@@ -179,7 +182,7 @@ function writeNarrative(doc, font, bold, envelope, entity, sources, details) {
     cursor.y -= 22;
   };
   const line = (text, { size = 11, weight = font, gap = 5, indent = 48 } = {}) => {
-    for (const row of wrap(text, 88)) {
+    for (const row of wrap(text, Math.floor(968 / size))) {
       if (cursor.y < 64) fresh();
       cursor.page.drawText(pdfText(row), {
         x: indent,
@@ -193,88 +196,80 @@ function writeNarrative(doc, font, bold, envelope, entity, sources, details) {
   };
   fresh();
   line(details.reference, { size: 10, weight: bold });
-  line(`Prepared for ${details.client || "the client"} on behalf of ${entity?.display_name || "the broker"}.`);
-  line(
-    "Companies House filings are fetched from the company number. The UK Sanctions List is searched for the company and its directors. The broker records the date each document was received and the date it was checked. Those dates belong to this contract."
-  );
-  cursor.y -= 8;
+  cursor.y -= 4;
   line("Pack details", { size: 14, weight: bold });
   line(`Broker: ${details.broker}`);
   if (details.brokerOffice) line(details.brokerOffice);
   line(`Contractor: ${details.contractor || "—"}`);
   if (details.supplier) line(`Supplier: ${details.supplier}`);
   line(`Client: ${details.client || "—"}`);
-  line(details.version);
+  line(`Contract: ${details.version}`);
 
   for (const record of sources.records) {
     const bundle = record.directoryId ? registryBundle(record.directoryId) : null;
     const profile = bundle?.profile || {};
     cursor.y -= 8;
-    line(`${record.label} — ${record.companyName}`, { size: 14, weight: bold });
-    line(`Company number ${profile.companyNumber || record.companyNumber || "—"}`);
-    line(`Status: ${profile.status || "—"} · Incorporated ${profile.incorporatedOn || "—"}`);
+    line(`${record.label} - ${record.companyName}`, { size: 14, weight: bold });
+    line(
+      `Company number ${profile.companyNumber || record.companyNumber || "—"} · ${profile.status || "—"} · incorporated ${profile.incorporatedOn || "—"}`
+    );
     line(`Registered office: ${profile.registeredOffice || "—"}`);
     for (const previous of profile.previousNames || []) {
-      line(`Previously ${previous.name}${previous.period ? ` (${previous.period})` : ""}`);
+      line(`Formerly ${previous.name}${previous.period ? ` (${previous.period})` : ""}`);
     }
-    if (profile.accounts) line(`Accounts: ${profile.accounts}`);
-    if (profile.confirmationStatement) line(`Confirmation statement: ${profile.confirmationStatement}`);
+    if (profile.accounts) {
+      line(`Accounts: ${filingStatus(profile.accounts, /Last accounts made up to (\d{1,2} \w+ \d{4})/i, "last made up to")}`);
+    }
+    if (profile.confirmationStatement) {
+      line(
+        `Confirmation statement: ${filingStatus(profile.confirmationStatement, /Last statement dated (\d{1,2} \w+ \d{4})/i, "last dated")}`
+      );
+    }
+    const sanctions = bundle?.sanctions;
+    if (sanctions) {
+      const result = sanctions.hitCount
+        ? `${sanctions.hitCount} possible match${sanctions.hitCount === 1 ? "" : "es"}`
+        : "no match";
+      line(`UK Sanctions List: ${result} (list dated ${sanctions.listedOn || "-"})`);
+    }
     const officers = bundle?.officers || [];
-    line(officers.length ? "Directors and other officers" : "No officers were returned", {
-      size: 12,
-      weight: bold,
-    });
+    if (officers.length) line("Officers", { size: 11, weight: bold });
     for (const officer of officers) {
       line(
         [
-          officer.name,
+          displayName(officer.name),
           officer.role,
-          officer.status,
           officer.appointedOn ? `appointed ${officer.appointedOn}` : "",
           officer.resignedOn ? `resigned ${officer.resignedOn}` : "",
         ]
           .filter(Boolean)
-          .join(" · ")
+          .join(" · "),
+        { size: 10 }
       );
     }
     const pscs = bundle?.pscs || [];
-    if (pscs.length) {
-      line("People with significant control", { size: 12, weight: bold });
-      for (const person of pscs) {
-        line(
-          [
-            person.name,
-            person.status,
-            person.notifiedOn ? `notified ${person.notifiedOn}` : "",
-            person.ceasedOn ? `ceased ${person.ceasedOn}` : "",
-          ]
-            .filter(Boolean)
-            .join(" · ")
-        );
-        if (person.natureOfControl) line(person.natureOfControl, { size: 10 });
-      }
-    }
-    const sanctions = bundle?.sanctions;
-    if (sanctions) {
-      line("UK Sanctions List", { size: 12, weight: bold });
+    if (pscs.length) line("People with significant control", { size: 11, weight: bold });
+    for (const person of pscs) {
       line(
-        sanctions.hitCount
-          ? `${sanctions.hitCount} possible match${sanctions.hitCount === 1 ? "" : "es"} on the list dated ${sanctions.listedOn || "the latest publication"}.`
-          : `No match on the list dated ${sanctions.listedOn || "the latest publication"}.`
+        [
+          person.name,
+          person.notifiedOn ? `notified ${person.notifiedOn}` : "",
+          person.ceasedOn ? `ceased ${person.ceasedOn}` : "",
+          shortControl(person.natureOfControl),
+        ]
+          .filter(Boolean)
+          .join(" · "),
+        { size: 10 }
       );
     }
   }
 
-  cursor.y -= 8;
-  line("Broker verification", { size: 14, weight: bold });
-  line(
-    "The annex index lists every document in this pack, the page it starts on, the date the broker received it and the date the broker checked it for this client. The broker's director signs the director's certificate that follows these declarations."
-  );
-
   const today = Date.now();
-  const facts = sources.records.map((record) => companyFacts(record, sources.documents, today));
-  const row = (result, text) => {
-    wrap(text, 80).forEach((part, index) => {
+  const facts = sources.records.map((record) => companyFacts(record, sources.documents, letters, today));
+  const ink = rgb(0.1, 0.12, 0.16);
+  const muted = rgb(0.38, 0.42, 0.48);
+  const row = (result, text, annex) => {
+    wrap(text, 70).forEach((part, index) => {
       if (cursor.y < 64) fresh();
       if (index === 0) {
         cursor.page.drawText(result, {
@@ -282,27 +277,67 @@ function writeNarrative(doc, font, bold, envelope, entity, sources, details) {
           y: cursor.y,
           size: 10,
           font: bold,
-          color: result === "Yes" ? rgb(0.1, 0.12, 0.16) : rgb(0.75, 0.1, 0.1),
+          color: result === "Yes" ? ink : rgb(0.75, 0.1, 0.1),
         });
+        if (annex) cursor.page.drawText(annex, { x: 480, y: cursor.y, size: 10, font, color: ink });
       }
-      cursor.page.drawText(pdfText(part), { x: 84, y: cursor.y, size: 10, font, color: rgb(0.1, 0.12, 0.16) });
+      cursor.page.drawText(pdfText(part), { x: 84, y: cursor.y, size: 10, font, color: ink });
       cursor.y -= 15;
     });
   };
   cursor.y -= 8;
   line("Declarations", { size: 14, weight: bold });
-  line("The result of each check for each company in this pack.");
   for (const fact of facts) {
     cursor.y -= 4;
-    line(`${fact.label} - ${fact.companyName}`, { size: 12, weight: bold });
-    for (const [result, text] of fact.declarations) row(result, text);
+    line(`${fact.label} - ${fact.companyName}`, { size: 11, weight: bold });
+    if (cursor.y < 64) fresh();
+    for (const [x, label] of [
+      [48, "Result"],
+      [84, "Check"],
+      [480, "Annex"],
+    ]) {
+      cursor.page.drawText(label, { x, y: cursor.y, size: 8, font: bold, color: muted });
+    }
+    cursor.y -= 13;
+    for (const [result, text, annex] of fact.declarations) row(result, text, annex);
   }
   cursor.y -= 8;
   line("Disclosures", { size: 14, weight: bold });
-  const disclosures = facts.flatMap((fact) => fact.disclosures);
-  if (!disclosures.length) line("None found in the checks in this pack.");
-  for (const text of disclosures) line(`- ${text}`, { size: 10 });
-  void envelope;
+  const disclosed = facts.filter((fact) => fact.disclosures.length);
+  if (!disclosed.length) line("None.");
+  for (const fact of disclosed) {
+    cursor.y -= 4;
+    line(`${fact.label} - ${fact.companyName}`, { size: 11, weight: bold });
+    for (const text of fact.disclosures) line(`- ${text}`, { size: 10 });
+  }
+}
+
+/** Companies House prints "Next … due by D … Last … D"; keep the last date, the due date and any overdue flag. */
+function filingStatus(text, lastPattern, lastLabel) {
+  const last = (text.match(lastPattern) || [])[1];
+  const due = (text.match(/due by (\d{1,2} \w+ \d{4})/i) || [])[1];
+  if (!last && !due) return text;
+  return [last ? `${lastLabel} ${last}` : "", due ? `next due ${due}` : "", /overdue/i.test(text) ? "OVERDUE" : ""]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+function shortControl(text) {
+  return String(text || "")
+    .split(";")
+    .map((part) =>
+      part
+        .trim()
+        .replace(/^Ownership of shares\s*[-–]\s*/i, "shares ")
+        .replace(/^Ownership of voting rights\s*[-–]\s*/i, "votes ")
+        .replace(/^Right to appoint or remove directors.*/i, "appoints directors")
+        .replace(/^Has significant influence or control.*/i, "significant influence")
+        .replace(/75% or more/i, "75%+")
+        .replace(/More than 50% but less than 75%/i, "50-75%")
+        .replace(/More than 25% but not more than 50%/i, "25-50%")
+    )
+    .filter(Boolean)
+    .join(", ");
 }
 
 function parseDay(value) {
@@ -316,7 +351,7 @@ function withinMonths(value, months, today) {
 }
 
 function filingDate(label) {
-  return (String(label || "").match(/- (\d{1,2} \w{3,9} \d{4})$/) || [])[1] || "";
+  return (String(label || "").match(/[-—] (\d{1,2} \w{3,9} \d{4})$/) || [])[1] || "";
 }
 
 function displayName(name) {
@@ -326,86 +361,92 @@ function displayName(name) {
 }
 
 /** Declarations and disclosures come only from what this pack holds, so nothing is asserted that was not checked. */
-function companyFacts(record, documents, today) {
+function companyFacts(record, documents, letters, today) {
   const bundle = record.directoryId ? registryBundle(record.directoryId) : null;
   const profile = bundle?.profile || {};
   const officers = bundle?.officers || [];
   const pscs = bundle?.pscs || [];
   const sanctions = bundle?.sanctions;
   const mine = documents.filter((doc) => doc.partyId === record.directoryId);
-  const has = (...keys) => keys.every((key) => mine.some((doc) => doc.requirementKey === key));
+  const matches = (keys) => mine.filter((doc) => keys.includes(doc.requirementKey) || keys.includes(doc.virtual));
+  const has = (...keys) => keys.every((key) => matches([key]).length > 0);
+  const annex = (...keys) =>
+    matches(keys)
+      .map((doc) => letters[doc.key])
+      .join(", ");
   const yes = (value) => (value ? "Yes" : "No");
-  const name = record.companyName;
   const accountsOverdue = /overdue/i.test(profile.accounts || "");
   const statementOverdue = /overdue/i.test(profile.confirmationStatement || "");
   const declarations = [
-    [yes(/^active$/i.test(profile.status || "")), "Active at Companies House"],
-    [yes(!accountsOverdue), "Accounts filed on time"],
-    [yes(!statementOverdue), "Confirmation statement filed on time"],
-    [yes(officers.length > 0), "Directors and people with significant control taken from Companies House"],
-    [yes(sanctions && !sanctions.hitCount), "No match on the UK Sanctions List"],
+    [yes(/^active$/i.test(profile.status || "")), "Active at Companies House", ""],
+    [yes(!accountsOverdue), "Accounts up to date", ""],
+    [yes(!statementOverdue), "Confirmation statement up to date", ""],
+    [yes(sanctions && !sanctions.hitCount), "No UK Sanctions List match", annex("sanctions")],
   ];
   if (record.roleKey === "supplier") {
     declarations.push(
-      [yes(has("vat")), "VAT registration certificate held"],
+      [yes(has("vat")), "VAT certificate", annex("vat")],
       [
-        yes(has("el_certificate", "pl_certificate", "pi_certificate", "pi_schedule")),
-        "Employers' Liability, Public Liability and Professional Indemnity cover held, with the PI policy schedule and wording",
+        yes(has("el_certificate", "pl_certificate", "pi_certificate")),
+        "EL, PL and PI certificates",
+        annex("el_certificate", "pl_certificate", "pi_certificate"),
       ],
-      [yes(has("bank")), "Bank statement held for the account that pays workers and HMRC"],
-      [yes(has("payslip")), "Illustrative payslip held"],
-      [yes(has("payroll_chain")), "Each PAYE reference and ERN confirmed in writing, with the payroll chain map"]
+      [yes(has("pi_schedule")), "PI policy schedule and wording", annex("pi_schedule")],
+      [yes(has("bank")), "Bank statement for the account paying workers and HMRC", annex("bank")],
+      [yes(has("payslip")), "Illustrative payslip", annex("payslip")],
+      [yes(has("payroll_chain")), "Payroll chain map; PAYE references and ERNs confirmed", annex("payroll_chain")]
     );
   } else {
     declarations.push(
-      [yes(has("paye_letter")), "HMRC PAYE registration letter held"],
-      [yes(has("el_certificate", "el_schedule")), "Employers' Liability cover held, with policy pages naming the supplier"]
+      [yes(has("paye_letter")), "HMRC PAYE registration letter", annex("paye_letter")],
+      [
+        yes(has("el_certificate", "el_schedule")),
+        "EL certificate and policy pages naming the supplier",
+        annex("el_certificate", "el_schedule"),
+      ]
     );
   }
   declarations.push([
     yes(mine.length > 0 && mine.every((doc) => doc.receivedOn && doc.checkedOn)),
-    "Every document received and checked, with the dates in the annex index",
+    "All documents received and checked",
+    "",
   ]);
 
   const disclosures = [];
   if (profile.status && !/^active$/i.test(profile.status)) {
-    disclosures.push(`${name} is shown as ${profile.status} at Companies House.`);
+    disclosures.push(`Shown as ${profile.status} at Companies House.`);
   }
-  if (accountsOverdue) disclosures.push(`${name} has overdue accounts at Companies House.`);
-  if (statementOverdue) disclosures.push(`${name} has an overdue confirmation statement at Companies House.`);
+  if (accountsOverdue) disclosures.push("Accounts overdue.");
+  if (statementOverdue) disclosures.push("Confirmation statement overdue.");
   if (withinMonths(profile.incorporatedOn, 12, today)) {
-    disclosures.push(`${name} was incorporated on ${profile.incorporatedOn}, less than a year ago.`);
+    disclosures.push(`Incorporated ${profile.incorporatedOn}, under a year ago.`);
   }
   for (const previous of profile.previousNames || []) {
-    disclosures.push(`${name} was previously ${previous.name}${previous.period ? ` (${previous.period})` : ""}.`);
+    const changedOn = String(previous.period || "").split(/\s[-–]\s/)[1];
+    if (withinMonths(changedOn, 24, today)) disclosures.push(`Name changed from ${previous.name} on ${changedOn}.`);
   }
   for (const doc of mine) {
     const date = filingDate(doc.label);
-    if (/^Registered office change/i.test(doc.label) && withinMonths(date, 12, today)) {
-      disclosures.push(`${name} changed its registered office on ${date}.`);
+    if (doc.requirementKey === "registered_office" && withinMonths(date, 12, today)) {
+      disclosures.push(`Registered office changed ${date}.`);
     }
   }
   for (const officer of officers) {
     const who = displayName(officer.name);
-    if (withinMonths(officer.appointedOn, 12, today)) {
-      disclosures.push(`${who} was appointed ${officer.role || "officer"} of ${name} on ${officer.appointedOn}.`);
-    }
-    if (withinMonths(officer.resignedOn, 24, today)) {
-      disclosures.push(`${who} resigned as ${officer.role || "officer"} of ${name} on ${officer.resignedOn}.`);
-    }
+    const role = (officer.role || "officer").toLowerCase();
+    if (withinMonths(officer.appointedOn, 12, today)) disclosures.push(`${who} appointed ${role} ${officer.appointedOn}.`);
+    if (withinMonths(officer.resignedOn, 24, today)) disclosures.push(`${who} resigned as ${role} ${officer.resignedOn}.`);
   }
   for (const person of pscs) {
-    if (withinMonths(person.ceasedOn, 24, today)) {
-      disclosures.push(`${person.name} ceased to be a person with significant control of ${name} on ${person.ceasedOn}.`);
-    }
+    if (withinMonths(person.ceasedOn, 24, today)) disclosures.push(`${person.name} ceased as a PSC ${person.ceasedOn}.`);
   }
   if (sanctions?.hitCount) {
     const names = (sanctions.hits || []).map((hit) => hit.name).join("; ");
     disclosures.push(
-      `${sanctions.hitCount} possible match${sanctions.hitCount === 1 ? "" : "es"} on the UK Sanctions List for ${name}: ${names}.`
+      `${sanctions.hitCount} possible UK Sanctions List match${sanctions.hitCount === 1 ? "" : "es"}: ${names}.`
     );
   }
-  return { label: record.label, companyName: name, roleKey: record.roleKey, declarations, disclosures };
+  return { label: record.label, companyName: record.companyName, roleKey: record.roleKey, declarations, disclosures };
 }
 
 export const CERTIFICATE_SIGNATURE = { x: 48, y: 250, w: 260, h: 84 };
@@ -439,18 +480,16 @@ function addCertificate(doc, font, bold, { entity, broker, details, sources }) {
   const supplier = sources.records.find((record) => record.roleKey === "spv");
   const companies = [contractor?.companyName, supplier?.companyName].filter(Boolean).join(" and ");
   const hmrc = [
-    contractor
-      ? `${contractor.companyName}'s payroll chain map with written confirmation of each PAYE reference and ERN`
-      : "",
+    contractor ? `${contractor.companyName}'s payroll chain map and PAYE/ERN confirmation` : "",
     supplier ? `${supplier.companyName}'s HMRC PAYE registration letter` : "",
   ]
     .filter(Boolean)
-    .join(", and ");
+    .join(" and ");
   const statements = [
-    `I have reviewed the Companies House records, the UK Sanctions List search and every document listed in the annex index for ${companies || "the companies in this pack"}.`,
-    "Each document was received and checked on the dates shown in the annex index.",
-    `The HMRC standing of the payroll chain is evidenced in this pack by ${hmrc || "the documents in the annex index"}.`,
-    "The declarations and disclosures in this pack are complete and accurate, and I know of nothing else that should be disclosed to the client.",
+    `I have reviewed the Companies House records, sanctions search and annexed documents for ${companies || "the companies in this pack"}.`,
+    "Each document was received and checked on the dates in the annex index.",
+    `HMRC standing is evidenced by ${hmrc || "the annexed documents"}.`,
+    "The declarations and disclosures are complete and accurate. I know of nothing else the client should be told.",
   ];
   statements.forEach((statement, index) => {
     page.drawText(`${index + 1}.`, { x: 48, y, size: 11, font: bold, color: ink });
@@ -486,7 +525,7 @@ function annexLetter(index) {
 const INDEX_TOP = 790;
 const INDEX_BOTTOM = 56;
 const INDEX_ROW = 15;
-const INDEX_FIRST_PAGE_HEADER = 4;
+const INDEX_FIRST_PAGE_HEADER = 3;
 
 /** One row per document plus one heading row each time the company changes. */
 function indexRows(placed) {
@@ -539,16 +578,8 @@ function writeIndex(doc, font, bold, placed) {
     page = doc.addPage([595.28, 841.89]);
     y = INDEX_TOP;
     if (first) {
-      page.drawText("Annex evidence index", { x: 48, y, size: 16, font: bold, color: ink });
-      y -= 22;
-      page.drawText("Page numbers are pages of this pack. Dates are when the broker received and checked each document.", {
-        x: 48,
-        y,
-        size: 9,
-        font,
-        color: muted,
-      });
-      y -= 22;
+      page.drawText("Annex index", { x: 48, y, size: 16, font: bold, color: ink });
+      y -= 26;
     }
     header();
   };
@@ -598,22 +629,7 @@ async function addVirtualPage(doc, item) {
     color: rgb(0.2, 0.24, 0.3),
   });
   let y = 740;
-  const rows =
-    item.doc.virtual === "sanctions"
-      ? sanctionLines(bundle?.sanctions)
-      : (bundle?.officers || []).map((officer) =>
-          [
-            officer.name,
-            officer.role,
-            officer.status,
-            officer.nationality,
-            officer.appointedOn ? `appointed ${officer.appointedOn}` : "",
-            officer.resignedOn ? `resigned ${officer.resignedOn}` : "",
-          ]
-            .filter(Boolean)
-            .join(" · ")
-        );
-  for (const row of rows.length ? rows : ["Nothing further was returned."]) {
+  for (const row of sanctionLines(bundle?.sanctions)) {
     for (const line of wrap(row, 88)) {
       page.drawText(pdfText(line), { x: 48, y, size: 10, font, color: rgb(0.1, 0.12, 0.16) });
       y -= 14;

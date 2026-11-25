@@ -194,10 +194,7 @@ export default function SignRoom() {
           {session.checklist?.length ? (
             <div>
               <h2>Final evidence appendix</h2>
-              <p className="muted">
-                These were not collected in the due diligence pack. Upload them
-                before you can sign.
-              </p>
+              <p className="muted">Upload these before signing.</p>
               <div className="form-grid">
                 {session.checklist.map((item) => (
                   <div className="party-card" key={item.id}>
@@ -207,7 +204,9 @@ export default function SignRoom() {
                         {item.satisfied ? "satisfied" : "required"}
                       </span>
                     </strong>
-                    <p className="muted">{item.description}</p>
+                    {item.description && item.description !== item.label ? (
+                      <p className="muted">{item.description}</p>
+                    ) : null}
                     {(item.files || []).length ? (
                       <ul className="meta" style={{ margin: "0.35rem 0" }}>
                         {item.files.map((file) => (

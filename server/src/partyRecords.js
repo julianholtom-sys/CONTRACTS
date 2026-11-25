@@ -390,18 +390,6 @@ export function packSources(envelopeId) {
     for (const file of files.filter((item) => item.source === "companies_house")) {
       documents.push(docFromFile(roleKey, label, record, file));
     }
-    if (registry?.officers_json) {
-      documents.push({
-        key: `officers:${record.id}`,
-        roleKey,
-        roleLabel: label,
-        companyName: record.company_name,
-        label: "Director details from Companies House",
-        source: "companies_house",
-        virtual: "officers",
-        partyId: record.id,
-      });
-    }
     if (registry?.sanctions_json) {
       documents.push({
         key: `sanctions:${record.id}`,
@@ -420,7 +408,7 @@ export function packSources(envelopeId) {
         missing.push(`${label}: ${uploadLabel}`);
         continue;
       }
-      documents.push(docFromFile(roleKey, label, record, file));
+      documents.push({ ...docFromFile(roleKey, label, record, file), label: uploadLabel });
     }
   }
   const saved = checksFor(envelopeId);

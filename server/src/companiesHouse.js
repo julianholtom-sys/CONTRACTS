@@ -8,10 +8,9 @@ const FILING_KEYS = {
   AD01: "registered_office",
   PSC01: "psc",
   PSC02: "psc",
-  PSC04: "psc",
-  PSC05: "psc",
-  PSC07: "psc",
 };
+
+const EVIDENCE_ORDER = ["incorporation", "change_of_name", "registered_office", "psc"];
 
 const FILING_LABELS = {
   incorporation: "Certificate of incorporation",
@@ -23,11 +22,8 @@ const FILING_LABELS = {
 const TYPE_LABELS = {
   CERTNM: "Change of name certificate",
   NM01: "Change of name by resolution (NM01)",
-  PSC01: "Notice of individual PSC (PSC01)",
-  PSC02: "Notice of corporate PSC (PSC02)",
-  PSC04: "Change of PSC details (PSC04)",
-  PSC05: "Change of corporate PSC details (PSC05)",
-  PSC07: "Cessation of PSC (PSC07)",
+  PSC01: "PSC notice (PSC01)",
+  PSC02: "Corporate PSC notice (PSC02)",
 };
 
 export function filingLabel(key, type) {
@@ -157,6 +153,39 @@ function parseFilings(html) {
   return filings;
 }
 
+/**
+ * One filing per fact: the incorporation, each change of name, the latest
+ * registered office move, and the notice for each current PSC. Filing history
+ * is newest first.
+ */
+function evidenceFilings(filings, pscs) {
+  const current = pscs
+    .filter((person) => !person.ceasedOn)
+    .map((person) => person.name.toLowerCase().replace(/^(mr|mrs|ms|miss|dr|sir)\.?\s+/, ""));
+  const certified = new Set(filings.filter((filing) => filing.type === "CERTNM").map((filing) => filing.date));
+  const notified = new Set();
+  const kept = [];
+  for (const filing of filings) {
+    if (filing.key === "registered_office") {
+      if (!kept.some((item) => item.key === "registered_office")) kept.push(filing);
+    } else if (filing.key === "change_of_name") {
+      if (filing.type === "CERTNM" || !certified.has(filing.date)) kept.push(filing);
+    } else if (filing.key === "psc") {
+      const description = filing.description.toLowerCase();
+      const person = current.find((name) => description.includes(name));
+      if (person && !notified.has(person)) {
+        notified.add(person);
+        kept.push(filing);
+      }
+    }
+  }
+  const incorporation = filings.filter((filing) => filing.key === "incorporation").at(-1);
+  if (incorporation) kept.push(incorporation);
+  return kept
+    .reverse()
+    .sort((a, b) => EVIDENCE_ORDER.indexOf(a.key) - EVIDENCE_ORDER.indexOf(b.key));
+}
+
 export async function fetchCompanyRecord(companyNumber) {
   const number = normaliseCompanyNumber(companyNumber);
   const profileHtml = await getText(`${CH}/company/${number}`);
@@ -189,7 +218,7 @@ export async function fetchCompanyRecord(companyNumber) {
     if (!html.includes(`page=${page + 1}`)) break;
   }
 
-  return { profile, officers, pscs, filings };
+  return { profile, officers, pscs, filings: evidenceFilings(filings, pscs) };
 }
 
 function personName(name) {

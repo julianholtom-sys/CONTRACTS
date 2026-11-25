@@ -68,12 +68,9 @@ export const PARTY_UPLOADS = {
     ["pl_certificate", "Public Liability certificate"],
     ["pi_certificate", "Professional Indemnity certificate"],
     ["pi_schedule", "Professional Indemnity policy schedule and wording"],
-    ["bank", "Bank statement for the account that pays workers and HMRC"],
+    ["bank", "Bank statement for the account paying workers and HMRC"],
     ["payslip", "Illustrative payslip"],
-    [
-      "payroll_chain",
-      "Payroll chain map and written confirmation of each PAYE reference and ERN",
-    ],
+    ["payroll_chain", "Payroll chain map and PAYE/ERN confirmation"],
   ],
   supplier: [
     ["paye_letter", "HMRC PAYE registration letter"],

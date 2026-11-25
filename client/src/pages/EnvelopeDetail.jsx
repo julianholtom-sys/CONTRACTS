@@ -173,12 +173,7 @@ export default function EnvelopeDetail() {
       {diligence?.applies ? (
         <section className="panel" style={{ marginBottom: "1.25rem" }}>
           <h2>Due diligence pack</h2>
-          <p className="muted">
-            The pack is built in the app. Companies House filings and the sanctions
-            check come from the company number. Attach only the documents that
-            cannot be fetched, enter the received and checked dates for this
-            client, then compile the pack and sign it here.
-          </p>
+          <p className="muted">Date each document, compile, then sign.</p>
           {diligence.validatedAt ? (
             <p className="meta">
               Broker signed {new Date(diligence.validatedAt).toLocaleString("en-GB")}
@@ -257,7 +252,7 @@ export default function EnvelopeDetail() {
               >
                 {busy === "all-dates" ? "Saving…" : "Apply to every document and save"}
               </button>
-              <p className="muted">Change any single document below if its dates differ.</p>
+              <p className="muted">Edit any document below that differs.</p>
             </div>
           ) : null}
           {diligence.documents?.length ? (
@@ -322,10 +317,7 @@ export default function EnvelopeDetail() {
                   </span>
                 </h3>
                 {section.roleKey === "company" ? (
-                  <p className="muted">
-                    The client does not supply the pack itself. Add a certificate
-                    for each name change, if the company has had one.
-                  </p>
+                  <p className="muted">Add a certificate for each name change, if any.</p>
                 ) : null}
                 {section.roleKey === "supplier" ? (
                   <label className="consent">
