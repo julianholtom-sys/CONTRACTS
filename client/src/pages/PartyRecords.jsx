@@ -231,7 +231,7 @@ function PartyEditor({ kind, copy, id }) {
                 {record.registry.legal_name} · {record.registry.status} · incorporated{" "}
                 {record.registry.incorporated_on} · {record.registry.registered_office}
                 {record.registry.sanctions
-                  ? ` · sanctions ${record.registry.sanctions.hitCount ? `${record.registry.sanctions.hitCount} possible match` : "no match"}`
+                  ? ` · sanctions ${record.registry.sanctions.hitCount ? `${record.registry.sanctions.hitCount} possible match` : "CLEAN"}`
                   : ""}
               </p>
             ) : (
