@@ -20,12 +20,26 @@ export default function SignaturePad({ onChange }) {
 
   function point(e) {
     const rect = canvasRef.current.getBoundingClientRect();
-    const src = e.touches?.[0] || e;
-    return { x: src.clientX - rect.left, y: src.clientY - rect.top };
+    return { x: e.clientX - rect.left, y: e.clientY - rect.top };
   }
 
   function emit() {
     onChange?.(canvasRef.current.toDataURL("image/png"));
+  }
+
+  function capture(e, on) {
+    try {
+      canvasRef.current[on ? "setPointerCapture" : "releasePointerCapture"](e.pointerId);
+    } catch {
+      // Pointer already gone; drawing still works without capture.
+    }
+  }
+
+  function stop(e) {
+    if (!drawing.current) return;
+    drawing.current = false;
+    capture(e, false);
+    emit();
   }
 
   return (
@@ -33,12 +47,13 @@ export default function SignaturePad({ onChange }) {
       <div className="sig-pad-wrap">
         <canvas
           ref={canvasRef}
-          onMouseDown={(e) => {
+          onPointerDown={(e) => {
             e.preventDefault();
+            capture(e, true);
             drawing.current = true;
             last.current = point(e);
           }}
-          onMouseMove={(e) => {
+          onPointerMove={(e) => {
             if (!drawing.current) return;
             e.preventDefault();
             const ctx = canvasRef.current.getContext("2d");
@@ -50,14 +65,8 @@ export default function SignaturePad({ onChange }) {
             last.current = p;
             emit();
           }}
-          onMouseUp={(e) => {
-            drawing.current = false;
-            e.preventDefault();
-            emit();
-          }}
-          onMouseLeave={() => {
-            drawing.current = false;
-          }}
+          onPointerUp={stop}
+          onPointerCancel={stop}
         />
       </div>
       <button

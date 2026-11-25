@@ -24,13 +24,27 @@ export function coverDetails(envelope, parties, entity, title) {
     broker: brokerBits.join(" · "),
     brokerOffice: entity?.registered_office || "",
     version: envelope?.party_shape === "four" ? "4-way" : "3-way",
-    prepared: envelope?.prepared_on ? `Prepared ${envelope.prepared_on}` : "",
+    prepared: envelope?.prepared_on ? `Prepared ${ukDate(envelope.prepared_on)}` : "",
   };
 }
 
-function clean(value) {
-  return String(value || "").replace(/[^\x20-\x7E]/g, " ");
+export function ukDate(value) {
+  const match = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return match ? `${match[3]}/${match[2]}/${match[1]}` : String(value || "");
 }
+
+/** Standard PDF fonts only draw Latin-1; map typographic punctuation first. */
+export function pdfText(value) {
+  return String(value || "")
+    .replace(/[\u2018\u2019\u201B\u2032]/g, "'")
+    .replace(/[\u201C\u201D\u2033]/g, '"')
+    .replace(/[\u2013\u2014\u2212]/g, "-")
+    .replace(/\u2026/g, "...")
+    .replace(/\u00A0/g, " ")
+    .replace(/[^\x20-\x7E\xA1-\xFF]/g, " ");
+}
+
+const clean = pdfText;
 
 /**
  * Writes the contract-specific lines onto a broker cover.
@@ -48,7 +62,6 @@ export function stampCoverDetails(page, font, bold, details) {
     width: panelW,
     height: panelH,
     color: rgb(1, 1, 1),
-    opacity: 0.94,
     borderColor: rgb(0, 0.45, 1),
     borderWidth: 1.5,
   });

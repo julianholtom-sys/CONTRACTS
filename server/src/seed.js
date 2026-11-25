@@ -5,7 +5,7 @@ import { readBytes, writeBytes } from "./storage.js";
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import { migrate } from "./migrate.js";
 import { ensureAdminPassword } from "./auth.js";
-import { ensureStoredDateFields } from "./documentFields.js";
+import { ensureFallbackSupplierFields, ensureStoredDateFields } from "./documentFields.js";
 import { ensureVerifyToken } from "./domainVerify.js";
 
 async function makePdf({ title, subtitle, lines = [], footer }) {
@@ -159,6 +159,7 @@ export function ensureSigningEvidence() {
         ) VALUES (?, ?, 'spv', 'Supplier (SPV)', 2, 1)`
       ).run(newId(), templateId);
     }
+    ensureFallbackSupplierFields(templateId);
   }
 
   const roles = db.prepare("SELECT * FROM template_roles").all();
@@ -182,6 +183,9 @@ export function ensureSigningEvidence() {
   }
   db.prepare(
     "UPDATE template_fields SET label = 'Client signature' WHERE field_key = 'company_sig'"
+  ).run();
+  db.prepare(
+    "UPDATE template_fields SET label = 'Client date' WHERE field_key = 'company_date' AND label = 'Date'"
   ).run();
   db.prepare(
     "UPDATE template_fields SET label = 'Broker signature' WHERE field_key = 'agency_sig'"

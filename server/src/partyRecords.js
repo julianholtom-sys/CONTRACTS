@@ -72,6 +72,17 @@ export function serializeRecord(row) {
           status: registry.status || "",
           incorporated_on: registry.incorporated_on || "",
           registered_office: registry.registered_office || "",
+          previous_names: (parseJson(registry.profile_json, {}) || {}).previousNames || [],
+          officers: (parseJson(registry.officers_json, []) || []).map((officer) => ({
+            name: officer.name,
+            role: officer.role,
+            status: officer.status,
+          })),
+          pscs: (parseJson(registry.psc_json, []) || []).map((person) => ({
+            name: person.name,
+            ceasedOn: person.ceasedOn || "",
+            natureOfControl: person.natureOfControl || "",
+          })),
           company_type: registry.company_type || "",
           fetched_at: registry.fetched_at || null,
           error: registry.error || "",
@@ -171,6 +182,7 @@ export async function refreshPartyRegistry(partyId) {
   try {
     sanctions = await screenNames({
       companyName: record.profile.legalName || party.company_name,
+      previousNames: record.profile.previousNames.map((item) => item.name),
       companyNumber: number,
       people: [...record.officers, ...record.pscs],
     });
@@ -191,16 +203,18 @@ export async function refreshPartyRegistry(partyId) {
       const stored = writeBytes("registry", `${partyId}-${filing.type}-${storedName(filing)}.pdf`, bytes);
       db.prepare(
         `INSERT INTO party_files (
-          id, party_id, source, requirement_key, label, original_name, mime, storage_ref, file_hash, created_at
-        ) VALUES (?, ?, 'companies_house', ?, ?, ?, 'application/pdf', ?, ?, ?)`
+          id, party_id, source, requirement_key, label, original_name, mime, storage_ref, file_hash,
+          source_ref, created_at
+        ) VALUES (?, ?, 'companies_house', ?, ?, ?, 'application/pdf', ?, ?, ?, ?)`
       ).run(
         newId(),
         partyId,
         filing.key,
-        `${filingLabel(filing.key)} — ${filing.date || filing.type}`,
+        `${filingLabel(filing.key, filing.type)} — ${filing.date || filing.type}`,
         filing.description || `${filing.type}.pdf`,
         stored.storageRef,
         stored.sha256,
+        filing.filingId || stored.sha256,
         now()
       );
     } catch (err) {
@@ -423,7 +437,10 @@ export function packSources(envelopeId) {
 
 function docFromFile(roleKey, label, record, file) {
   return {
-    key: `file:${file.id}`,
+    key:
+      file.source === "companies_house" && file.source_ref
+        ? `filing:${record.id}:${file.source_ref}`
+        : `file:${file.id}`,
     roleKey,
     roleLabel: label,
     companyName: record.company_name,
@@ -457,6 +474,14 @@ export function saveDocChecks(envelopeId, checks) {
     }
     if (checked && !/^\d{4}-\d{2}-\d{2}$/.test(checked)) {
       throw new Error("Checked date must be a calendar date");
+    }
+    const local = new Date();
+    const today = `${local.getFullYear()}-${String(local.getMonth() + 1).padStart(2, "0")}-${String(local.getDate()).padStart(2, "0")}`;
+    if ((received && received > today) || (checked && checked > today)) {
+      throw new Error("Received and checked dates cannot be in the future");
+    }
+    if (received && checked && checked < received) {
+      throw new Error("A document cannot be checked before it was received");
     }
     upsert.run(envelopeId, check.key, received || null, checked || null);
   }

@@ -71,7 +71,7 @@ function reportDate(firstLine) {
   return match ? match[1].trim() : "";
 }
 
-export async function screenNames({ companyName, companyNumber, people = [] }) {
+export async function screenNames({ companyName, previousNames = [], companyNumber, people = [] }) {
   const file = await ensureList();
   const text = fs.readFileSync(file, "utf8");
   const lines = text.split(/\r?\n/);
@@ -88,38 +88,60 @@ export async function screenNames({ companyName, companyNumber, people = [] }) {
   const regimeIndex = header.indexOf("Regime Name");
 
   const companyTokens = tokens(companyName);
+  const formerNames = previousNames
+    .map((name) => ({ name, words: tokens(name) }))
+    .filter((item) => item.words.length);
   const number = String(companyNumber || "").replace(/\s+/g, "").toUpperCase();
+  const bareNumber = number.replace(/^0+/, "");
+  const seenPeople = new Set();
   const personTargets = people
     .map((person) => {
       const raw = String(person.name || "");
       const [surname, rest] = raw.split(",").map((part) => part.trim());
       const words = tokens(rest ? `${rest} ${surname}` : raw);
-      return { name: raw, words };
+      return { name: rest ? `${rest} ${surname}` : raw, words };
     })
-    .filter((person) => person.words.length >= 2);
+    .filter((person) => {
+      const key = [...person.words].sort().join(" ");
+      if (person.words.length < 2 || seenPeople.has(key)) return false;
+      seenPeople.add(key);
+      return true;
+    });
 
-  const hits = [];
+  const byId = new Map();
   for (const line of lines.slice(headerIndex + 1)) {
     if (!line.trim()) continue;
     const cells = splitCsv(line);
-    const joined = nameIndexes
-      .map((index) => cells[index] || "")
-      .join(" ")
-      .toLowerCase();
-    const registration = String(cells[registrationIndex] || "").toUpperCase();
+    const words = new Set(tokens(nameIndexes.map((index) => cells[index] || "").join(" ")));
+    const registrations = String(cells[registrationIndex] || "")
+      .toUpperCase()
+      .split(/[^A-Z0-9]+/)
+      .map((part) => part.replace(/^0+/, ""));
     const reasons = [];
-    if (number && registration.includes(number)) reasons.push("company number");
-    if (companyTokens.length && companyTokens.every((word) => joined.includes(word))) {
+    if (bareNumber && registrations.includes(bareNumber)) reasons.push("company number");
+    if (companyTokens.length && companyTokens.every((word) => words.has(word))) {
       reasons.push("company name");
     }
+    for (const former of formerNames) {
+      if (former.words.every((word) => words.has(word))) reasons.push(`previous name ${former.name}`);
+    }
     for (const person of personTargets) {
-      if (person.words.every((word) => joined.includes(word))) {
+      if (person.words.every((word) => words.has(word))) {
         reasons.push(person.name);
       }
     }
     if (!reasons.length) continue;
-    hits.push({
-      uniqueId: cells[uniqueIndex] || "",
+    const uniqueId = cells[uniqueIndex] || `row-${byId.size}`;
+    const existing = byId.get(uniqueId);
+    if (existing) {
+      for (const reason of reasons) {
+        if (!existing.matchedOn.includes(reason)) existing.matchedOn.push(reason);
+      }
+      continue;
+    }
+    if (byId.size >= 20) continue;
+    byId.set(uniqueId, {
+      uniqueId,
       regime: cells[regimeIndex] || "",
       name: nameIndexes
         .map((index) => cells[index] || "")
@@ -127,8 +149,8 @@ export async function screenNames({ companyName, companyNumber, people = [] }) {
         .join(" "),
       matchedOn: reasons,
     });
-    if (hits.length >= 20) break;
   }
+  const hits = [...byId.values()];
 
   return {
     listedOn,
@@ -137,6 +159,7 @@ export async function screenNames({ companyName, companyNumber, people = [] }) {
     listUrl: LIST_URL,
     query: {
       companyName,
+      previousNames: formerNames.map((item) => item.name),
       companyNumber: number,
       people: personTargets.map((person) => person.name),
     },

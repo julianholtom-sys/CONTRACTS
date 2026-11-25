@@ -1,9 +1,10 @@
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
-import { coverDetails, stampCoverDetails } from "./coverStamp.js";
+import { coverDetails, stampCoverDetails, ukDate } from "./coverStamp.js";
 import { db, newId, now, sha256, parseJson } from "./db.js";
 import { appendEvent } from "./events.js";
 import { readBytes, writeBytes } from "./storage.js";
 import { snapshotEnvelopeFields, envelopePlacedFields } from "./documentFields.js";
+import { PARTY_LABELS } from "./parties.js";
 
 async function loadOrCreateSourcePdf(template) {
   let bytes;
@@ -45,7 +46,7 @@ async function svgToPngBytes(svgBytes) {
   return resvg.render().asPng();
 }
 
-async function embedLogoImage(bakedDoc, asset) {
+export async function embedLogoImage(bakedDoc, asset) {
   const logoBytes = readBytes(asset.storage_ref);
   if (isSvgAsset(asset)) {
     return bakedDoc.embedPng(await svgToPngBytes(logoBytes));
@@ -149,8 +150,8 @@ export function getMasterTemplate({ includeInactive = false } = {}) {
 export async function bakeEnvelope(envelopeId, { actor = "system" } = {}) {
   const envelope = db.prepare("SELECT * FROM envelopes WHERE id = ?").get(envelopeId);
   if (!envelope)     throw new Error("Contract not found");
-  if (!["draft", "baking"].includes(envelope.status)) {
-    throw new Error("Only draft contracts can be baked");
+  if (!["draft", "baking", "ready"].includes(envelope.status)) {
+    throw new Error("A contract can only be baked before it is sent");
   }
 
   db.prepare(
@@ -170,8 +171,13 @@ export async function bakeEnvelope(envelopeId, { actor = "system" } = {}) {
          ORDER BY p.order_index ASC`
       )
       .all(envelopeId);
-    if (parties.length !== 3) {
-      throw new Error("All three parties (company/agency/supplier) must be assigned");
+    const expected = envelope.party_shape === "four" ? 4 : 3;
+    if (parties.length !== expected) {
+      throw new Error(
+        expected === 4
+          ? "All four parties (Contractor, Supplier, Broker, Client) must be assigned"
+          : "All three parties (Contractor, Broker, Client) must be assigned"
+      );
     }
 
     const templateId =
@@ -289,8 +295,8 @@ export async function bakeEnvelope(envelopeId, { actor = "system" } = {}) {
         }
       );
       const meta = [
-        envelope.prepared_on ? `Prepared ${envelope.prepared_on}` : null,
-        envelope.issued_at ? `Issued ${String(envelope.issued_at).slice(0, 10)}` : "Issued on send",
+        envelope.prepared_on ? `Prepared ${ukDate(envelope.prepared_on)}` : null,
+        envelope.issued_at ? `Issued ${ukDate(envelope.issued_at)}` : "Issued on send",
       ]
         .filter(Boolean)
         .join(" · ");
@@ -344,6 +350,16 @@ export async function bakeEnvelope(envelopeId, { actor = "system" } = {}) {
     });
 
     const placedFields = envelopePlacedFields(envelopeId);
+    const unsigned = parties.filter(
+      (party) =>
+        !placedFields.some((field) => field.role_id === party.role_id && field.field_type === "signature")
+    );
+    if (unsigned.length) {
+      const names = unsigned.map((party) => PARTY_LABELS[party.role_key] || party.role_key).join(", ");
+      throw new Error(
+        `The master contract has no signature field for: ${names}. Replace the master contract with one that names each party, then bake again.`
+      );
+    }
     for (const field of placedFields) {
       const page = bakedDoc.getPages()[
         Math.min(Number(field.page || 0), bakedDoc.getPageCount() - 1)

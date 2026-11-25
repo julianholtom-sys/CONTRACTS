@@ -239,6 +239,41 @@ function PartyEditor({ kind, copy, id }) {
             ) : (
               <p className="meta">Not fetched yet.</p>
             )}
+            {record.registry?.fetched_at ? (
+              <ul className="audit-list">
+                {(record.registry.previous_names || []).map((item) => (
+                  <li key={`prev-${item.name}`}>
+                    <strong>Previously {item.name}</strong>
+                    <span>{item.period}</span>
+                  </li>
+                ))}
+                {(record.registry.officers || []).map((officer) => (
+                  <li key={`officer-${officer.name}-${officer.role}`}>
+                    <strong>{officer.name}</strong>
+                    <span>
+                      {officer.role} · {officer.status}
+                    </span>
+                  </li>
+                ))}
+                {(record.registry.pscs || []).map((person) => (
+                  <li key={`psc-${person.name}`}>
+                    <strong>{person.name}</strong>
+                    <span>
+                      Person with significant control
+                      {person.ceasedOn ? ` · ceased ${person.ceasedOn}` : ""}
+                    </span>
+                  </li>
+                ))}
+                {(record.registry.sanctions?.hits || []).map((hit) => (
+                  <li key={`hit-${hit.uniqueId}`}>
+                    <strong>Possible sanctions match: {hit.name}</strong>
+                    <span>
+                      {hit.regime} · matched on {hit.matchedOn.join(", ")}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
             <button className="btn" type="button" disabled={Boolean(busy)} onClick={onFetch}>
               {busy === "fetch" ? "Fetching…" : "Fetch from Companies House"}
             </button>
@@ -271,6 +306,7 @@ function PartyEditor({ kind, copy, id }) {
                   <input
                     type="file"
                     accept=".pdf,.png,.jpg,.jpeg"
+                    aria-label={`${item.file ? "Replace" : "Upload"} ${item.label}`}
                     disabled={Boolean(busy)}
                     onChange={(e) => {
                       const file = e.target.files?.[0];

@@ -171,7 +171,7 @@ function brokerDiligenceUrl(envelopeId, baseUrl) {
   const envelope = db.prepare("SELECT * FROM envelopes WHERE id = ?").get(envelopeId);
   assertDdEditable(envelope);
   const token = issuePartyToken(broker.id);
-  return { url: `${baseUrl}/diligence/${token.raw}` };
+  return { url: `${baseUrl}/diligence/${token.raw}`, path: `/diligence/${token.raw}` };
 }
 
 function fileNameFromRef(ref) {

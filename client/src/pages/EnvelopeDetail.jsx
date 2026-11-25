@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../api.js";
 
 const EVENT_LABELS = {
@@ -33,6 +33,7 @@ function eventLabel(type) {
 
 export default function EnvelopeDetail() {
   const { id } = useParams();
+  const navigate = useNavigate();
   const [envelope, setEnvelope] = useState(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
@@ -40,6 +41,7 @@ export default function EnvelopeDetail() {
   const [chain, setChain] = useState(null);
   const [nameDraft, setNameDraft] = useState({});
   const [checks, setChecks] = useState({});
+  const [allDates, setAllDates] = useState({ receivedOn: "", checkedOn: "" });
 
   async function reload() {
     const data = await api.getEnvelope(id);
@@ -74,6 +76,19 @@ export default function EnvelopeDetail() {
 
   const diligence = envelope.due_diligence;
   const issueBlocked = Boolean(diligence?.applies && !diligence.validatedAt);
+  const undatedCount = (diligence?.missing || []).filter((item) => item.includes("received and checked dates")).length;
+  const otherMissing = (diligence?.missing || []).filter((item) => !item.includes("received and checked dates"));
+
+  function saveChecks(values) {
+    return api.saveDueDiligenceChecks(
+      id,
+      (diligence.documents || []).map((doc) => ({
+        key: doc.key,
+        receivedOn: values[doc.key]?.receivedOn || "",
+        checkedOn: values[doc.key]?.checkedOn || "",
+      }))
+    );
+  }
 
   return (
     <div>
@@ -115,10 +130,10 @@ export default function EnvelopeDetail() {
         <button
           className="btn"
           type="button"
-          disabled={busy || envelope.status !== "draft"}
+          disabled={busy || !["draft", "ready"].includes(envelope.status)}
           onClick={() => run("bake", () => api.bakeEnvelope(id))}
         >
-          {busy === "bake" ? "Baking…" : "Bake"}
+          {busy === "bake" ? "Baking…" : envelope.status === "ready" ? "Bake again" : "Bake"}
         </button>
         <button
           className="btn secondary"
@@ -180,12 +195,20 @@ export default function EnvelopeDetail() {
           )}
           {diligence.missing?.length > 0 && !diligence.validatedAt ? (
             <ul className="audit-list">
-              {diligence.missing.map((item) => (
+              {otherMissing.map((item) => (
                 <li key={item}>
                   <strong>Still needed</strong>
                   <span>{item}</span>
                 </li>
               ))}
+              {undatedCount ? (
+                <li>
+                  <strong>Still needed</strong>
+                  <span>
+                    Received and checked dates for {undatedCount} document{undatedCount === 1 ? "" : "s"}
+                  </span>
+                </li>
+              ) : null}
             </ul>
           ) : null}
           {diligence.records?.map((record) => (
@@ -199,6 +222,44 @@ export default function EnvelopeDetail() {
               ) : null}
             </p>
           ))}
+          {diligence.documents?.length && !diligence.validatedAt ? (
+            <div className="party-card" style={{ marginTop: "1rem" }}>
+              <h3>Same dates for every document</h3>
+              <div className="signer-row">
+                <label>
+                  Received
+                  <input
+                    type="date"
+                    value={allDates.receivedOn}
+                    onChange={(e) => setAllDates((current) => ({ ...current, receivedOn: e.target.value }))}
+                  />
+                </label>
+                <label>
+                  Checked
+                  <input
+                    type="date"
+                    value={allDates.checkedOn}
+                    onChange={(e) => setAllDates((current) => ({ ...current, checkedOn: e.target.value }))}
+                  />
+                </label>
+              </div>
+              <button
+                type="button"
+                className="btn secondary"
+                disabled={Boolean(busy) || !allDates.receivedOn || !allDates.checkedOn}
+                onClick={() =>
+                  run("all-dates", () =>
+                    saveChecks(
+                      Object.fromEntries((diligence.documents || []).map((doc) => [doc.key, { ...allDates }]))
+                    )
+                  )
+                }
+              >
+                {busy === "all-dates" ? "Saving…" : "Apply to every document and save"}
+              </button>
+              <p className="muted">Change any single document below if its dates differ.</p>
+            </div>
+          ) : null}
           {diligence.documents?.length ? (
             <div className="form-grid">
               {diligence.documents.map((doc) => {
@@ -243,18 +304,7 @@ export default function EnvelopeDetail() {
                 type="button"
                 className="btn secondary"
                 disabled={Boolean(busy)}
-                onClick={() =>
-                  run("dates", () =>
-                    api.saveDueDiligenceChecks(
-                      id,
-                      (diligence.documents || []).map((doc) => ({
-                        key: doc.key,
-                        receivedOn: checks[doc.key]?.receivedOn || "",
-                        checkedOn: checks[doc.key]?.checkedOn || "",
-                      }))
-                    )
-                  )
-                }
+                onClick={() => run("dates", () => saveChecks(checks))}
               >
                 {busy === "dates" ? "Saving…" : "Save received and checked dates"}
               </button>
@@ -435,7 +485,7 @@ export default function EnvelopeDetail() {
                 onClick={() =>
                   run("sign", async () => {
                     const result = await api.dueDiligenceSignLink(id);
-                    window.location.assign(result.url);
+                    navigate(result.path);
                   })
                 }
               >

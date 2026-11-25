@@ -20,8 +20,18 @@ const FILING_LABELS = {
   psc: "Person with significant control notice",
 };
 
-export function filingLabel(key) {
-  return FILING_LABELS[key] || key;
+const TYPE_LABELS = {
+  CERTNM: "Change of name certificate",
+  NM01: "Change of name by resolution (NM01)",
+  PSC01: "Notice of individual PSC (PSC01)",
+  PSC02: "Notice of corporate PSC (PSC02)",
+  PSC04: "Change of PSC details (PSC04)",
+  PSC05: "Change of corporate PSC details (PSC05)",
+  PSC07: "Cessation of PSC (PSC07)",
+};
+
+export function filingLabel(key, type) {
+  return TYPE_LABELS[type] || FILING_LABELS[key] || key;
 }
 
 export function normaliseCompanyNumber(value) {
@@ -39,6 +49,8 @@ export function normaliseCompanyNumber(value) {
 function decode(value) {
   return String(value || "")
     .replace(/<[^>]+>/g, " ")
+    .replace(/&#(\d+);/g, (_, code) => String.fromCodePoint(Number(code)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, code) => String.fromCodePoint(parseInt(code, 16)))
     .replace(/&amp;/g, "&")
     .replace(/&nbsp;/g, " ")
     .replace(/&#39;|&apos;/g, "'")
@@ -75,8 +87,13 @@ function parseProfile(html) {
     (html.match(/<h2 class="heading-medium"><strong>Confirmation statement<\/strong><\/h2>([\s\S]*?)<\/div>/i) ||
       [])[1]
   );
+  const previousNames = [];
+  for (let n = 1; field(html, `previous-name-${n}`); n += 1) {
+    previousNames.push({ name: field(html, `previous-name-${n}`), period: field(html, `previous-date-${n}`) });
+  }
   return {
     legalName: name,
+    previousNames,
     companyNumber: field(html, "company-number").replace(/^Company number\s*/i, ""),
     status: field(html, "company-status"),
     companyType: field(html, "company-type-value"),
@@ -104,7 +121,12 @@ function parsePeople(html, prefix) {
       nationality: field(block, `${prefix}-nationality-${n}`),
       country: field(block, `${prefix}-country-of-residence-${n}`),
       dateOfBirth: field(block, `${prefix}-date-of-birth-${n}`),
-      natureOfControl: field(block, `psc-nature-of-control-${n}`),
+      natureOfControl: [...block.matchAll(new RegExp(`id="psc-noc-${n}-[^"]*"[^>]*>([\\s\\S]*?)</dd>`, "gi"))]
+        .map((match) => decode(match[1]))
+        .filter(Boolean)
+        .join("; "),
+      ceasedOn: field(block, `psc-ceased-on-${n}`),
+      registrationNumber: field(block, `psc-registration-number-${n}`),
       address: field(block, `${prefix}-address-value-${n}`),
     });
   });
@@ -124,8 +146,9 @@ function parseFilings(html) {
     if (!href) continue;
     filings.push({
       type,
+      filingId: (href.match(/filing-history\/([^/]+)\/document/i) || [])[1] || "",
       key,
-      label: filingLabel(key),
+      label: filingLabel(key, type),
       date,
       description,
       pdfUrl: href.startsWith("http") ? href.replace(/&amp;/g, "&") : `${CH}${href.replace(/&amp;/g, "&")}`,

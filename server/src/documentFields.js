@@ -71,22 +71,42 @@ export function ensureStoredDateFields(templateId) {
   return added;
 }
 
+const FALLBACK_MASTER_FIELDS = [
+  { role: "company", field_key: "company_sig", label: "Client signature", field_type: "signature", page: 0, x: 50, y: 190, w: 180, h: 36 },
+  { role: "company", field_key: "company_date", label: "Client date", field_type: "date", page: 0, x: 250, y: 198, w: 120, h: 20 },
+  { role: "agency", field_key: "agency_sig", label: "Broker signature", field_type: "signature", page: 0, x: 50, y: 120, w: 180, h: 36 },
+  { role: "agency", field_key: "agency_date", label: "Broker date", field_type: "date", page: 0, x: 250, y: 128, w: 120, h: 20 },
+  { role: "supplier", field_key: "supplier_sig", label: "Contractor signature", field_type: "signature", page: 0, x: 50, y: 50, w: 180, h: 36 },
+  { role: "supplier", field_key: "supplier_date", label: "Contractor date", field_type: "date", page: 0, x: 250, y: 58, w: 120, h: 20 },
+  { role: "spv", field_key: "spv_sig", label: "Supplier signature", field_type: "signature", page: 0, x: 50, y: 260, w: 180, h: 36 },
+  { role: "spv", field_key: "spv_date", label: "Supplier date", field_type: "date", page: 0, x: 250, y: 268, w: 120, h: 20 },
+];
+
 export function insertFallbackMasterFields(templateId) {
   const roleIds = roleIdsForTemplate(templateId);
-  const fields = [
-    { role: "company", field_key: "company_sig", label: "Client signature", field_type: "signature", page: 0, x: 50, y: 190, w: 180, h: 36 },
-    { role: "company", field_key: "company_date", label: "Client date", field_type: "date", page: 0, x: 250, y: 198, w: 120, h: 20 },
-    { role: "agency", field_key: "agency_sig", label: "Broker signature", field_type: "signature", page: 0, x: 50, y: 120, w: 180, h: 36 },
-    { role: "agency", field_key: "agency_date", label: "Broker date", field_type: "date", page: 0, x: 250, y: 128, w: 120, h: 20 },
-    { role: "supplier", field_key: "supplier_sig", label: "Contractor signature", field_type: "signature", page: 0, x: 50, y: 50, w: 180, h: 36 },
-    { role: "supplier", field_key: "supplier_date", label: "Contractor date", field_type: "date", page: 0, x: 250, y: 58, w: 120, h: 20 },
-    { role: "spv", field_key: "spv_sig", label: "Supplier signature", field_type: "signature", page: 0, x: 50, y: 260, w: 180, h: 36 },
-    { role: "spv", field_key: "spv_date", label: "Supplier date", field_type: "date", page: 0, x: 250, y: 268, w: 120, h: 20 },
-  ];
-  for (const field of fields) {
+  for (const field of FALLBACK_MASTER_FIELDS) {
     if (!roleIds[field.role]) continue;
     insertTemplateField(templateId, roleIds[field.role], field);
   }
+}
+
+/** Templates still on the fallback fields predate the Supplier (SPV) role, so they lack its block. */
+export function ensureFallbackSupplierFields(templateId) {
+  const keys = new Set(FALLBACK_MASTER_FIELDS.map((field) => field.field_key));
+  const fields = db
+    .prepare("SELECT field_key FROM template_fields WHERE template_id = ?")
+    .all(templateId);
+  if (!fields.length || !fields.every((field) => keys.has(field.field_key))) return 0;
+  const roleIds = roleIdsForTemplate(templateId);
+  if (!roleIds.spv) return 0;
+  const present = new Set(fields.map((field) => field.field_key));
+  let added = 0;
+  for (const field of FALLBACK_MASTER_FIELDS.filter((item) => item.role === "spv")) {
+    if (present.has(field.field_key)) continue;
+    insertTemplateField(templateId, roleIds.spv, field);
+    added += 1;
+  }
+  return added;
 }
 
 export function replaceTemplateFields(templateId, detected) {

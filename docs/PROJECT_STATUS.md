@@ -32,7 +32,9 @@ Broker setup is where company details, the front cover, the back cover, and the 
 - Sending-company catalog is **Union Payroll only** for now (demo companies Acme / Northwind / Contoso / Fabrikam / Adventure Works are retired / soft-deleted).
 - Legal profile for Union: **UNION WORK SERVICES LIMITED (trading as Union Payroll)**, company number **16734536**, registered office International House, 22-28 Wood Street, Doncaster, United Kingdom, DN1 3LW; contact `hello@union-payroll.ltd`.
 - Broker setup is company details, the person who signs, the front cover, the back cover, and the brand SVG. Brokers do not have a sending domain, from address, mailbox, or signature. Creating and baking a contract does not wait on broker domain proof.
-- **Due diligence pack** follows the worked example: broker cover with the contract’s own details stamped on it, company identity, an annex index with page numbers, then the documents. The same cover stamp is applied to the contract. Companies House filings and a UK Sanctions List check are fetched from the company number for the contractor and, on a 4-way, the supplier. The person adding that company attaches only what cannot be fetched. Contractor: VAT certificate, Employers’ Liability certificate, Public Liability certificate, Professional Indemnity certificate, PI policy schedule and wording, bank statement for the account that pays workers and HMRC, illustrative payslip, and a payroll chain map with written confirmation of each PAYE reference and ERN. Supplier: HMRC PAYE registration letter, Employers’ Liability certificate, and EL policy pages naming the supplier. Declarations and the director’s certificate are generated in the pack. Received and checked dates are entered on the contract, because they change with each client. No party is emailed to supply these or to sign the pack.
+- **Due diligence pack** follows the worked example: broker cover with the contract’s own details stamped on it, company identity, an annex index with page numbers, then the documents. The same cover stamp is applied to the contract. Companies House filings and a UK Sanctions List check are fetched from the company number for the contractor and, on a 4-way, the supplier. The person adding that company attaches only what cannot be fetched. Contractor: VAT certificate, Employers’ Liability certificate, Public Liability certificate, Professional Indemnity certificate, PI policy schedule and wording, bank statement for the account that pays workers and HMRC, illustrative payslip, and a payroll chain map with written confirmation of each PAYE reference and ERN. Supplier: HMRC PAYE registration letter, Employers’ Liability certificate, and EL policy pages naming the supplier. Received and checked dates are entered on the contract, because they change with each client. No party is emailed to supply these or to sign the pack.
+- **Not built yet in the pack:** the completed due diligence declarations and the contractor director’s signed certificate “covering HMRC standing and any required disclosures” (the user’s brief; Part J of the worked example, signed there by the contractor’s director), plus the supplier’s equivalent warranties. Open decision: who signs the certificate, given no party is emailed to complete the pack.
+- **Pack layout (2026-11-25):** generated cover in the worked example’s style (logo, broker name, “Due Diligence & Onboarding Pack”, “For use with the {broker} {contract}”, parties, pack reference, broker legal block), then narrative pages (company status, previous names, officers, PSCs with nature of control and ceased dates, sanctions result), then the **annex evidence index** as a table: annex letter, document, page range, received date, checked date, grouped by party. Then the documents, the broker signature page, and the broker’s back cover last. Dates print as dd/mm/yyyy. The sanctions evidence page lists every name and number searched (company, number, previous names, directors and PSCs, merged when Companies House lists the same person twice).
 - The library still stores a broker, a contractor, the contract type and the cover. Staff reach it by answering “working from the library” on the start screen, not from a library form in the header.
 - Each party is a company name, signee name, role (Director, or Authorised signatory) and email. The contract has a signature and a date for each party. The broker’s signature on the due diligence pack is that pack’s date.
 - **Delete company** on the list and setup pages, with an in-app **Are you sure?** dialog (Cancel / Yes, delete). Soft-delete (`is_active = 0`); existing contracts stay on file.
@@ -40,13 +42,14 @@ Broker setup is where company details, the front cover, the back cover, and the 
 
 ### Templates
 
-- **One master contract** — always included on every contract. **Open / Replace / Delete** on the Templates page (same controls as company files). Uploading the PDF scans for Client / Agency / Contractor signature and detail fields. Signing room lists those fields with **Jump to**.
+- **One master contract** — always included on every contract. **Open / Replace / Delete** on the Templates page (same controls as company files). Uploading the PDF scans for Client / Broker / Contractor signature and detail fields, and Supplier (SPV) when that word is on the page. Signing room lists those fields with **Jump to**.
+- Bake refuses a contract when any of its parties has no signature field, and names the party. The current master is still the generated placeholder (“three-party execution”, “Company / Agency / Supplier execution blocks”); it now carries Supplier signature and date fields so 4-way contracts bake. Replace it with the real Union Payroll master contract.
 - **Contract appendices** — **Add appendix** sits at the top of that section, then Open / Replace / Delete per file. If an appendix needs signing to accept those terms, the same detection and jump-to fields are added.
 
 ### Contracts
 
 - UI word is **contract** everywhere staff see it. Internal API/SQLite still use `envelopes`.
-- Draft → bake → ready → send → sequential sign → completed.
+- Draft → bake → ready → send → sequential sign → completed. **Bake again** is available while the contract is ready and unsent, so a template fix does not need a new contract.
 - **3-way** (usual): Contractor, Broker, Client. **4-way** (rare): those three plus Supplier (SPV). Sign order is Contractor, Supplier when present, Broker, Client.
 - The due diligence pack is built in the app. No party is emailed to complete it. Companies House and the sanctions check are fetched from the company number. Staff attach only the documents that cannot be fetched, enter the received and checked dates, compile the pack, and the broker signs it in the app. Send stays blocked until that signature.
 - At signing, documents already collected for the due diligence pack are not requested again. The supplier does not re-upload incorporation or name-change certificates. What remains is Contractor director ID, Supplier director ID, and for the Client the incorporation certificate, VAT certificate, and director ID. The broker attaches nothing.
@@ -122,6 +125,7 @@ Rules of the road:
 18. Staff sign in with email and password. The library stores broker + contractor pairings (contract template and cover). Every party has a company, signatory, role and email, and the contract has a signature and date for each. The same SQLite database is the shared store for every browser.
 19. Login opens on one question: library or new contract. A new contract asks for broker, contract type, 3-way or 4-way, then the other parties. Broker setup holds company details, covers, and the brand SVG. Mail is sent only by the compliance company, so broker setup has no sending domain, from address, mailbox, or signature. The compliance company has no Companies House number.
 20. The due diligence pack is compiled in the app. Parties are not emailed a link to upload documents, and the broker is not emailed to sign. Companies House filings and the UK Sanctions List check are fetched from the company number. Staff attach only the documents that cannot be fetched, enter received and checked dates on the contract, compile the pack, and sign it from the contract. This replaces the email flow in item 17. Item 17 stays as the record of what the app used to do.
+21. End-to-end test with three live Companies House companies on a 4-way Union Payroll contract (test records only; nothing sent): contractor MISSIONOPSAI LTD (14437210, formerly K-769 LTD), supplier ARC RISK MODELS LIMITED (15497898, ceased corporate PSC Arc Manco Limited), client DEVI MATA LTD. Placeholder uploads are stamped “TEST PLACEHOLDER - NOT A REAL DOCUMENT”. Fixed along the way: sanctions screening matches whole words and dedupes aliases by Unique ID, and also checks previous names and the company number; previous names, officers and PSCs (nature of control, ceased date) are stored and shown on the record and in the pack; Companies House filings keep a stable key, so received/checked dates survive a refetch; “Same dates for every document” bulk entry; dates cannot be in the future or checked before received; the dedicated DD cover, annex table and back cover described above; contract cover stamp panel is opaque; the broker’s “Sign the pack” opens inside the app (it used to jump to the API port in dev); the signature pad uses pointer events so it works with a finger on a phone; the broker signature page goes before the back cover; 4-way contracts bake (the bake used to demand exactly three parties).
 
 ## Active git / PR notes
 
@@ -130,10 +134,12 @@ Rules of the road:
 - Desktop clone path in this session: `C:\Users\jahwo\Documents\Attest` (empty `Documents\Attext` folder is not the repo). Also cloned at `C:\Users\Shadow\Documents\Attest`.
 - Superseded feature branches (safe to ignore / close after merge): PR **#5**, PR **#4**, and historical `cursor/medialaunch-brand-ui-59a8`.
 - On a work PC: `git checkout main && git pull origin main`.
+- `.cursor/rules/central-backup.mdc` says the live copy is the Cursor-hosted repo `origin.cursor.com/julian-holtom/attest` (remote name `cursor` in the Windows clone). Pushing there needs the origin CLI, which does not run on native Windows, so this Windows PC pushes to GitHub (`origin`) only when the user asks. The Cursor copy has one extra commit (f5ec4f1, the newer rule text), which is now in this repo’s rule file. Push to the Cursor copy from a Mac, Linux, or WSL machine with the origin CLI signed in.
 
 ## Runtime snapshot (this environment)
 
 - Windows desktop, 2026-08-16: local API on `:8787` (`NODE_ENV=production node src/index.js` in `server/`). UI: http://localhost:8787
+- Windows desktop `C:\Users\Shadow\Documents\Attest`, 2026-11-25: `npm run dev` (API :8787, UI :5173). The test contract from item 21 is baked and ready, broker-signed pack, **not sent**.
 - Phone tunnel is a Linux/tmux workflow (`attest-tunnel`); do not assume it is running on this Windows box. Live URL only in `TUNNEL_URL.txt` on the host that runs the tunnel.
 
 ## Known issues / next
@@ -149,6 +155,13 @@ Rules of the road:
 - [x] Due diligence pack is compiled in the app. Parties are not emailed to complete it. The broker signs it from the contract.
 - [ ] Say “deploy to live” when phone demo should pick up new code (don’t assume every commit is live).
 - [ ] Make `npm start` work on Windows (`cross-env` or equivalent).
+- [ ] Due diligence declarations and the contractor director’s certificate (and supplier warranties) — decide who signs the certificate, then build it.
+- [ ] Union Payroll broker library record is still flagged `is_sample = 1`, so its contracts show a SAMPLE badge and the “examples used to fill fields” note. Its saved company name reads “Union Work Services Limited ( Union Payroll)” with a stray space.
+- [ ] Client company number: the worked example also checks the client at Companies House; the app does not fetch the client yet.
+- [ ] The introductory email text saved on the compliance company types “Union Payroll” literally. Swap it for `{{broker_name}}` so E Street Management contracts read correctly (data, not code).
+- [ ] E Street Management needs its real legal details, covers and logo.
+- [ ] Upload the real Union Payroll master contract to replace the placeholder.
+- [ ] Staff dates in the UI follow the browser locale (US format in some browsers); PDFs use dd/mm/yyyy.
 
 ## Continuity for humans (any device)
 
