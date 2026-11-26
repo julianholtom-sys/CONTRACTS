@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../api.js";
 import { emptyParty } from "../PartyFields.jsx";
+import SaveProgressBar from "../SaveProgressBar.jsx";
 
 const COPY = {
   contractor: {
@@ -73,9 +74,11 @@ function PartyEditor({ kind, copy, id }) {
   const isNew = id === "new";
   const [form, setForm] = useState(emptyParty());
   const [record, setRecord] = useState(null);
+  const [details, setDetails] = useState(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState("");
+  const formRef = useRef(null);
 
   useEffect(() => {
     if (isNew) return;
@@ -83,14 +86,8 @@ function PartyEditor({ kind, copy, id }) {
       .party(id)
       .then((data) => {
         setRecord(data);
-        setForm({
-          company_name: data.company_name,
-          normal_name: data.normal_name,
-          company_number: data.company_number,
-          signer_name: data.signer_name,
-          signer_role: data.signer_role,
-          signer_email: data.signer_email,
-        });
+        setForm(formFrom(data));
+        setDetails(detailsFrom(data));
       })
       .catch((err) => setError(err.message));
   }, [id, isNew]);
@@ -99,17 +96,35 @@ function PartyEditor({ kind, copy, id }) {
     setForm((current) => ({ ...current, [key]: value }));
   }
 
+  const formDirty = isNew
+    ? JSON.stringify(formFrom(form)) !== JSON.stringify(formFrom(emptyParty()))
+    : Boolean(record) && JSON.stringify(formFrom(form)) !== JSON.stringify(formFrom(record));
+  const detailsDirty =
+    Boolean(record && details) && JSON.stringify(details) !== JSON.stringify(detailsFrom(record));
+
+  function onSaveProgress() {
+    if (formDirty && !formRef.current?.reportValidity()) return;
+    onSave();
+  }
+
   async function onSave(event) {
-    event.preventDefault();
+    event?.preventDefault();
     setBusy("save");
     setError("");
     setNotice("");
     try {
-      const saved = isNew
-        ? await api.saveParty(kind, form)
-        : await api.updateParty(id, form);
-      setRecord(saved);
-      setNotice("Saved");
+      let saved = record;
+      if (formDirty) {
+        saved = isNew ? await api.saveParty(kind, form) : await api.updateParty(id, form);
+        setRecord(saved);
+        setForm(formFrom(saved));
+      }
+      if (!isNew && detailsDirty) {
+        saved = await api.savePartyDetails(id, details);
+        setRecord(saved);
+        setDetails(detailsFrom(saved));
+      }
+      setNotice("Progress saved");
       if (isNew) navigate(`${copy.path}/${saved.id}`);
     } catch (err) {
       setError(err.message);
@@ -168,7 +183,7 @@ function PartyEditor({ kind, copy, id }) {
       </div>
       {error ? <p className="error">{error}</p> : null}
       {notice ? <p className="meta">{notice}</p> : null}
-      <form className="panel form-grid" onSubmit={onSave}>
+      <form ref={formRef} className="panel form-grid" onSubmit={onSave}>
         <h2>Company</h2>
         <label>
           Company number
@@ -223,9 +238,6 @@ function PartyEditor({ kind, copy, id }) {
             required
           />
         </label>
-        <button className="btn" type="submit" disabled={Boolean(busy)}>
-          {busy === "save" ? "Saving…" : "Save"}
-        </button>
       </form>
 
       {record ? (
@@ -332,11 +344,23 @@ function PartyEditor({ kind, copy, id }) {
               </div>
             ))}
           </section>
-          <PayeInsurance key={record.id} record={record} onSaved={setRecord} />
+          {details ? <PayeInsurance record={record} value={details} onChange={setDetails} /> : null}
         </>
       ) : null}
+      <SaveProgressBar dirty={formDirty || detailsDirty} saving={busy === "save"} onSave={onSaveProgress} />
     </div>
   );
+}
+
+function formFrom(data) {
+  return {
+    company_name: data.company_name || "",
+    normal_name: data.normal_name || "",
+    company_number: data.company_number || "",
+    signer_name: data.signer_name || "",
+    signer_role: data.signer_role || "director",
+    signer_email: data.signer_email || "",
+  };
 }
 
 function detailsFrom(record) {
@@ -356,45 +380,21 @@ function detailsFrom(record) {
   };
 }
 
-function PayeInsurance({ record, onSaved }) {
-  const [form, setForm] = useState(() => detailsFrom(record));
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
-
+function PayeInsurance({ record, value: form, onChange }) {
   const setPolicy = (key, field) => (e) =>
-    setForm((current) => ({
-      ...current,
-      insurance: { ...current.insurance, [key]: { ...current.insurance[key], [field]: e.target.value } },
-    }));
-
-  async function onSubmit(event) {
-    event.preventDefault();
-    setBusy(true);
-    setError("");
-    setNotice("");
-    try {
-      const saved = await api.savePartyDetails(record.id, form);
-      onSaved(saved);
-      setForm(detailsFrom(saved));
-      setNotice("Saved");
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setBusy(false);
-    }
-  }
+    onChange({
+      ...form,
+      insurance: { ...form.insurance, [key]: { ...form.insurance[key], [field]: e.target.value } },
+    });
 
   return (
-    <form className="panel form-grid" style={{ marginTop: "1rem" }} onSubmit={onSubmit}>
+    <section className="panel form-grid" style={{ marginTop: "1rem" }}>
       <h2>PAYE and insurance</h2>
-      {error ? <p className="error">{error}</p> : null}
-      {notice ? <p className="meta">{notice}</p> : null}
       <label>
         PAYE reference
         <input
           value={form.payeReference}
-          onChange={(e) => setForm((current) => ({ ...current, payeReference: e.target.value }))}
+          onChange={(e) => onChange({ ...form, payeReference: e.target.value })}
           placeholder="123/AB45678"
         />
       </label>
@@ -432,9 +432,6 @@ function PayeInsurance({ record, onSaved }) {
           </div>
         );
       })}
-      <button className="btn" type="submit" disabled={busy}>
-        {busy ? "Saving…" : "Save PAYE and insurance"}
-      </button>
-    </form>
+    </section>
   );
 }

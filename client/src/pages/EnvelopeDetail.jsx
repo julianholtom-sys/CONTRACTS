@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../api.js";
+import SaveProgressBar from "../SaveProgressBar.jsx";
 
 export default function EnvelopeDetail() {
   const { id } = useParams();
@@ -11,26 +12,29 @@ export default function EnvelopeDetail() {
   const [links, setLinks] = useState({});
   const [nameDraft, setNameDraft] = useState({});
   const [checks, setChecks] = useState({});
-  const [companyDates, setCompanyDates] = useState({});
   const [pepDraft, setPepDraft] = useState({});
+  const savedDates = useRef({});
 
   async function reload() {
     const data = await api.getEnvelope(id);
     setEnvelope(data);
-    const next = {};
-    const byCompany = {};
-    for (const doc of data.due_diligence?.documents || []) {
-      const value = { receivedOn: doc.receivedOn || "", checkedOn: doc.checkedOn || "" };
-      next[doc.key] = value;
-      const shared = byCompany[doc.roleKey];
-      if (!shared) byCompany[doc.roleKey] = { ...value };
-      else {
-        if (shared.receivedOn !== value.receivedOn) shared.receivedOn = "";
-        if (shared.checkedOn !== value.checkedOn) shared.checkedOn = "";
-      }
-    }
-    setChecks(next);
-    setCompanyDates(byCompany);
+    const before = savedDates.current;
+    const saved = Object.fromEntries(
+      (data.due_diligence?.documents || []).map((doc) => [
+        doc.key,
+        { receivedOn: doc.receivedOn || "", checkedOn: doc.checkedOn || "" },
+      ])
+    );
+    savedDates.current = saved;
+    setChecks((current) =>
+      Object.fromEntries(
+        Object.entries(saved).map(([key, value]) => {
+          const mine = current[key];
+          const edited = mine && before[key] && !sameDates(mine, before[key]);
+          return [key, edited ? mine : value];
+        })
+      )
+    );
   }
 
   useEffect(() => {
@@ -61,17 +65,52 @@ export default function EnvelopeDetail() {
   const datedCompanies = (diligence?.records || []).filter((record) =>
     (diligence.documents || []).some((doc) => doc.roleKey === record.roleKey)
   );
-  const companyDated = (roleKey) => Boolean(companyDates[roleKey]?.receivedOn && companyDates[roleKey]?.checkedOn);
+  const docsFor = (roleKey) => (diligence?.documents || []).filter((doc) => doc.roleKey === roleKey);
+  const companyDate = (roleKey, field) => {
+    const values = new Set(docsFor(roleKey).map((doc) => checks[doc.key]?.[field] || ""));
+    return values.size === 1 ? [...values][0] : "";
+  };
+  const setCompanyDate = (roleKey, field, value) =>
+    setChecks((current) => {
+      const next = { ...current };
+      for (const doc of docsFor(roleKey)) next[doc.key] = { ...next[doc.key], [field]: value };
+      return next;
+    });
 
-  function saveChecks(values) {
-    return api.saveDueDiligenceChecks(
-      id,
-      (diligence.documents || []).map((doc) => ({
-        key: doc.key,
-        receivedOn: values[doc.key]?.receivedOn || "",
-        checkedOn: values[doc.key]?.checkedOn || "",
-      }))
-    );
+  const changedDocs = (diligence?.documents || []).filter(
+    (doc) => !sameDates(checks[doc.key], savedDates.current[doc.key])
+  );
+  const draftNames = Object.entries(nameDraft).filter(
+    ([, draft]) => draft.previousName.trim() || draft.newName.trim()
+  );
+  const draftPep = (diligence?.pep || []).filter((person) => {
+    const draft = pepDraft[`${person.roleKey}:${person.personKey}`];
+    return !person.approvedOn && draft && draft !== person.result;
+  });
+  const unsaved = !ddLocked && Boolean(changedDocs.length || draftNames.length || draftPep.length);
+
+  async function saveProgress() {
+    if (draftNames.some(([, draft]) => !draft.previousName.trim() || !draft.newName.trim())) {
+      throw new Error("Enter both the previous name and the new name, or clear them");
+    }
+    if (changedDocs.length) {
+      await api.saveDueDiligenceChecks(
+        id,
+        changedDocs.map((doc) => ({ key: doc.key, ...checks[doc.key] }))
+      );
+    }
+    for (const [roleKey, draft] of draftNames) {
+      await api.addNameChange(id, { roleKey, previousName: draft.previousName, newName: draft.newName });
+      setNameDraft((prev) => ({ ...prev, [roleKey]: { previousName: "", newName: "" } }));
+    }
+    for (const person of draftPep) {
+      await api.savePepCheck(id, {
+        roleKey: person.roleKey,
+        personKey: person.personKey,
+        result: pepDraft[`${person.roleKey}:${person.personKey}`],
+        approved: false,
+      });
+    }
   }
 
   return (
@@ -198,9 +237,7 @@ export default function EnvelopeDetail() {
             <div className="party-card" style={{ marginTop: "1rem" }}>
               <h3>Dates by company</h3>
               {datedCompanies.map((record) => {
-                const value = companyDates[record.roleKey] || { receivedOn: "", checkedOn: "" };
-                const update = (field) => (e) =>
-                  setCompanyDates((current) => ({ ...current, [record.roleKey]: { ...value, [field]: e.target.value } }));
+                const update = (field) => (e) => setCompanyDate(record.roleKey, field, e.target.value);
                 return (
                   <div key={record.roleKey}>
                     <strong>
@@ -210,36 +247,27 @@ export default function EnvelopeDetail() {
                     <div className="signer-row">
                       <label>
                         Received
-                        <input type="date" value={value.receivedOn} onChange={update("receivedOn")} />
+                        <input
+                          type="date"
+                          value={companyDate(record.roleKey, "receivedOn")}
+                          disabled={ddLocked}
+                          onChange={update("receivedOn")}
+                        />
                       </label>
                       <label>
                         Checked
-                        <input type="date" value={value.checkedOn} onChange={update("checkedOn")} />
+                        <input
+                          type="date"
+                          value={companyDate(record.roleKey, "checkedOn")}
+                          disabled={ddLocked}
+                          onChange={update("checkedOn")}
+                        />
                       </label>
                     </div>
                   </div>
                 );
               })}
-              <button
-                type="button"
-                className="btn secondary"
-                disabled={Boolean(busy) || !datedCompanies.some((record) => companyDated(record.roleKey))}
-                onClick={() =>
-                  run("company-dates", () =>
-                    saveChecks(
-                      Object.fromEntries(
-                        (diligence.documents || []).map((doc) => [
-                          doc.key,
-                          companyDated(doc.roleKey) ? { ...companyDates[doc.roleKey] } : checks[doc.key],
-                        ])
-                      )
-                    )
-                  )
-                }
-              >
-                {busy === "company-dates" ? "Saving…" : "Apply to each company’s documents and save"}
-              </button>
-              <p className="muted">Edit any document below that differs.</p>
+              <p className="muted">Fills every document for that company. Edit any document below that differs.</p>
             </div>
           ) : null}
           {diligence.documents?.length ? (
@@ -257,6 +285,7 @@ export default function EnvelopeDetail() {
                         <input
                           type="date"
                           value={value.receivedOn}
+                          disabled={ddLocked}
                           onChange={(e) =>
                             setChecks((current) => ({
                               ...current,
@@ -270,6 +299,7 @@ export default function EnvelopeDetail() {
                         <input
                           type="date"
                           value={value.checkedOn}
+                          disabled={ddLocked}
                           onChange={(e) =>
                             setChecks((current) => ({
                               ...current,
@@ -282,14 +312,6 @@ export default function EnvelopeDetail() {
                   </div>
                 );
               })}
-              <button
-                type="button"
-                className="btn secondary"
-                disabled={Boolean(busy)}
-                onClick={() => run("dates", () => saveChecks(checks))}
-              >
-                {busy === "dates" ? "Saving…" : "Save received and checked dates"}
-              </button>
             </div>
           ) : null}
           {diligence.sections.filter((section) => !section.heldOnRecord).map((section) => {
@@ -625,7 +647,12 @@ export default function EnvelopeDetail() {
               type="button"
               className="btn"
               disabled={busy || !diligence.readyToCompile || Boolean(diligence.validatedAt)}
-              onClick={() => run("compile", () => api.compileDueDiligence(id))}
+              onClick={() =>
+                run("compile", async () => {
+                  if (unsaved) await saveProgress();
+                  await api.compileDueDiligence(id);
+                })
+              }
             >
               {busy === "compile" ? "Compiling…" : "Compile the pack"}
             </button>
@@ -633,7 +660,7 @@ export default function EnvelopeDetail() {
               <button
                 type="button"
                 className="btn secondary"
-                disabled={Boolean(busy) || Boolean(diligence.blockers?.length)}
+                disabled={Boolean(busy) || Boolean(diligence.blockers?.length) || unsaved}
                 onClick={() =>
                   run("sign", async () => {
                     const result = await api.dueDiligenceSignLink(id);
@@ -659,6 +686,9 @@ export default function EnvelopeDetail() {
               The signed pack is added to the contract as an extra document when the contract is sent.
             </p>
           )}
+          {!ddLocked ? (
+            <SaveProgressBar dirty={unsaved} saving={busy === "progress"} onSave={() => run("progress", saveProgress)} />
+          ) : null}
         </section>
       ) : null}
 
@@ -751,6 +781,10 @@ export default function EnvelopeDetail() {
       </div>
     </div>
   );
+}
+
+function sameDates(a, b) {
+  return (a?.receivedOn || "") === (b?.receivedOn || "") && (a?.checkedOn || "") === (b?.checkedOn || "");
 }
 
 function ukDay(iso) {
