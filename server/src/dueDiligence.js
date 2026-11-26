@@ -475,7 +475,7 @@ export async function signDueDiligence(envelopeId, {
     const ink = rgb(0.1, 0.12, 0.16);
     page.drawText(pdfText(ukDate(signedAt)), { x: box.dateX, y: box.dateY, size: 9, font: bold, color: ink });
     const evidence = wrapText(
-      `Signed electronically by ${signerName} (${party.signer_email}) on ${ukDate(signedAt)} at ${signedAt.slice(11, 19)} UTC from IP ${ip || "unknown"}`,
+      `Signed electronically by ${signerName} (${party.signer_email}) on ${ukDate(signedAt)} at ${signedAt.slice(11, 19)} UTC${ip ? ` from IP ${ip}` : ""}`,
       font,
       8,
       box.evidenceW || 483
@@ -550,7 +550,7 @@ async function appendSignaturePage(pdf, { envelope, party, image, font, bold, si
     font,
     color: rgb(0.1, 0.12, 0.16),
   });
-  page.drawText(pdfText(`Date ${ukDate(signedAt)} · Signed ${signedAt} · IP ${ip || "—"}`), {
+  page.drawText(pdfText(`Date ${ukDate(signedAt)} · Signed ${signedAt}${ip ? ` · IP ${ip}` : ""}`), {
     x: 48,
     y: 550,
     size: 11,

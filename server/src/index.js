@@ -160,11 +160,10 @@ const upload = multer({
   limits: { fileSize: 20 * 1024 * 1024 },
 });
 
+// IP addresses are not recorded for any party, so nothing downstream receives one.
 function clientMeta(req) {
-  const forwarded = req.headers["x-forwarded-for"]?.toString().split(",")[0].trim();
-  const ip = String(forwarded || req.socket.remoteAddress || "unknown").replace(/^::ffff:/, "");
   return {
-    ip,
+    ip: null,
     userAgent: req.headers["user-agent"] || "unknown",
   };
 }

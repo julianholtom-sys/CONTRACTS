@@ -218,8 +218,8 @@ export function seedDefaultEmailTemplates(entityId, userId = null) {
     {
       type: "completion",
       subject: "Completed: {{envelope_title}}",
-      html: "<p>{{envelope_title}} is complete.</p><p>The completed PDF binds every requested attachment, then ends with the audit trail: who received the file, when they signed, and their IP address.</p>",
-      text: "{{envelope_title}} is complete. The completed PDF binds every requested attachment, then ends with the audit trail: who received the file, when they signed, and their IP address.",
+      html: "<p>{{envelope_title}} is complete.</p><p>The completed PDF binds every requested attachment, then ends with the audit trail: who received the file and when they signed.</p>",
+      text: "{{envelope_title}} is complete. The completed PDF binds every requested attachment, then ends with the audit trail: who received the file and when they signed.",
     },
   ];
 

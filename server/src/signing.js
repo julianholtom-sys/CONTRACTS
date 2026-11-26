@@ -239,7 +239,7 @@ export async function applySignatureAndCompleteParty({
     CONSENT_TEXT,
     consentAt,
     signedAt,
-    ip || "127.0.0.1",
+    ip || "",
     userAgent || "unknown"
   );
 
@@ -258,7 +258,7 @@ export async function applySignatureAndCompleteParty({
       db.prepare(
         `UPDATE field_values SET value = ?, value_hash = ?, captured_at = ?, captured_ip = ?, party_id = ?
          WHERE id = ?`
-      ).run(value, valueHash, signedAt, ip || "127.0.0.1", partyId, existing.id);
+      ).run(value, valueHash, signedAt, ip || null, partyId, existing.id);
     } else {
       db.prepare(
         `INSERT INTO field_values (
@@ -272,7 +272,7 @@ export async function applySignatureAndCompleteParty({
         value,
         valueHash,
         signedAt,
-        ip || "127.0.0.1"
+        ip || null
       );
     }
   }

@@ -130,8 +130,8 @@ export default function EnvelopeDetail() {
         {envelope.status === "completed" ? (
           <p className="muted">
             The completed PDF binds every requested attachment, then ends with the
-            audit trail: who received the file, when they signed, and their IP
-            address. Every party receives that same bound copy.
+            audit trail: who received the file and when they signed. Every party
+            receives that same bound copy.
           </p>
         ) : null}
       </section>

@@ -89,7 +89,7 @@ export async function buildAuditCertificate({
   line("Audit trail", { size: 18, weight: bold, color: rgb(0, 0.45, 1) });
   y -= 6;
   line(
-    "This is the last part of the completed contract. Every requested attachment is bound in front of this page. It records who received the file, when they signed, and the IP address they signed from."
+    "This is the last part of the completed contract. Every requested attachment is bound in front of this page. It records who received the file and when they signed."
   );
   y -= 8;
   line(entity.legal_name, { weight: bold, size: 11 });
@@ -145,8 +145,8 @@ export async function buildAuditCertificate({
     line(`Received the file: ${fmt(received?.created_at || opened?.created_at)}`);
     line(`Signed: ${fmt(signed?.signed_at)}`);
     if (signed) line(`Signature: ${describeSignature(signed.method, signed.signature_font)}`);
-    line(`IP address: ${signed?.ip || opened?.ip || "—"}`);
-    if (opened?.created_at) line(`Opened: ${fmt(opened.created_at)} · IP ${opened.ip || "—"}`);
+    if (signed?.ip || opened?.ip) line(`IP address: ${signed?.ip || opened?.ip}`);
+    if (opened?.created_at) line(`Opened: ${fmt(opened.created_at)}${opened.ip ? ` · IP ${opened.ip}` : ""}`);
     if (signed?.user_agent) line(`Device: ${signed.user_agent}`, { indent: 12, size: 9 });
     if (signed?.consent_given_at) {
       line(`Consent recorded: ${fmt(signed.consent_given_at)}`);
@@ -166,7 +166,7 @@ export async function buildAuditCertificate({
       line("Bound in front of this page:", { weight: bold });
       for (const file of files) {
         line(
-          `${file.label}: ${file.original_name} · ${fmt(file.uploaded_at)} · IP ${file.uploaded_ip || "—"}`,
+          `${file.label}: ${file.original_name} · ${fmt(file.uploaded_at)}${file.uploaded_ip ? ` · IP ${file.uploaded_ip}` : ""}`,
           { indent: 12 }
         );
         line(`SHA-256 ${file.file_hash}`, { indent: 12, size: 8 });
@@ -187,7 +187,7 @@ export async function buildAuditCertificate({
       ? `${who.role_label} (${who.signer_name})`
       : event.actor || "system";
     line(
-      `${fmt(event.created_at)} · ${eventLabel(event.event_type)} · ${actor} · IP ${event.ip || "—"}`
+      `${fmt(event.created_at)} · ${eventLabel(event.event_type)} · ${actor}${event.ip ? ` · IP ${event.ip}` : ""}`
     );
     if (event.metadata?.original_name || event.metadata?.requirement_key) {
       line(
