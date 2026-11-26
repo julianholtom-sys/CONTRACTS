@@ -246,13 +246,16 @@ function annexList(numbers) {
 /** The document's name and date as one title: "Certificate of incorporation, 24/10/2022". */
 function documentTitle(doc) {
   if (doc.virtual === "sanctions") {
-    const searched = registryBundle(doc.partyId)?.sanctions?.searchedAt;
+    const searched = searchedOn(doc);
     return `UK Sanctions List screening${searched ? `, ${ukDate(searched)}` : ""}`;
   }
   const date = filingDate(doc.label);
   const name = String(doc.label).replace(/\s+[-—]\s+\d{1,2} \w{3,9} \d{4}$/, "");
   return date ? `${name}, ${chDate(date)}` : name;
 }
+
+/** The search is dated the day the broker checked it, not the day the app ran it. */
+const searchedOn = (doc) => doc.checkedOn || registryBundle(doc.partyId)?.sanctions?.searchedAt || "";
 
 const annexCaption = (number, title) => `Annex ${number}: ${title}`;
 
@@ -867,7 +870,7 @@ async function addAnnexPages(out, writer, item, caption, fonts) {
     const page = writer.newPage();
     drawCaption(page, fonts, caption);
     writer.y = BODY_TOP - 26;
-    writeSanctions(writer, registryBundle(item.doc.partyId)?.sanctions);
+    writeSanctions(writer, registryBundle(item.doc.partyId)?.sanctions, searchedOn(item.doc));
     return;
   }
   if (item.image) {
@@ -897,7 +900,7 @@ async function addAnnexPages(out, writer, item, caption, fonts) {
   });
 }
 
-function writeSanctions(writer, sanctions) {
+function writeSanctions(writer, sanctions, searched) {
   if (!sanctions) {
     writer.text("The sanctions search has not been run.");
     return;
@@ -906,7 +909,7 @@ function writeSanctions(writer, sanctions) {
   const rows = [
     ["List", `UK Sanctions List published ${listDate(sanctions.listedOn) || "—"}`],
     ["Source", sanctions.listUrl || "https://sanctionslist.fcdo.gov.uk/"],
-    ["Searched", ukDate(sanctions.searchedAt) || "—"],
+    ["Searched", ukDate(searched) || "—"],
     ["Company", query.companyName || "—"],
     ["Company number", query.companyNumber || "—"],
     ...((query.previousNames || []).length ? [["Previous names", query.previousNames.join("; ")]] : []),

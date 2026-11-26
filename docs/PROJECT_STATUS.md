@@ -176,6 +176,7 @@ Rules of the road:
     - **Due diligence pack:** the broker’s signing page offers the saved signature, with **Use a different signature**.
     - Signed contract dates print as dd/mm/yyyy. The record is found from the contract’s link to it; for the broker, from the broker the contract is sent for.
     - Tested on a copy of the database with mail switched off: the 4-way test contract was sent (three saved signatures and dates applied, both director IDs copied, one invitation to the client), then signed by the client, and the completed PDF carried all four signatures and the five bound documents. Vitalijs Silovs’s signature for Union Payroll was saved from the user’s image on 26/11. The contractor and supplier lines still in the test contract’s **Before sending** list are test records; fill them with test values only when testing.
+38. **Sanctions search dated when the broker checked it (user decision 2026-11-26).** The pack dates each sanctions search on the day the broker checked it, not the day the app ran it: the annex title, the annex index and the “Searched” row all use that annex’s checked date (the app’s own search date only shows if no checked date is entered yet). On the contract page the sanctions row has one date, **Searched and checked**, and its received date always follows it (server too); the company-wide Received date skips it. The pack will not compile if that date is before the publication date of the list used (“the sanctions search is dated before the list it used was published”). Fetching Companies House again no longer means re-dating the annex by hand.
 
 ## Active git / PR notes
 
@@ -223,7 +224,7 @@ Rules of the road:
 - [x] Staff dates on screen use UK format; PDFs use dd/mm/yyyy.
 - [x] DD pack v7 brief section 1 (item 31).
 - [x] DD pack v7 brief section 2 (item 34): supply chain Part, Companies House identity verification, PEP and adverse media approval, insurance rows, review frequency, worker arrangements, signing gate. 4-way as briefed, plus 3-way without the SPV.
-- [ ] Open question: the sanctions annex carries the date its search ran. Fetching Companies House again re-runs the search, so that annex’s received and checked dates must be updated by hand (done for the test pack on 26/11). Decide whether they should follow the search date automatically.
+- [x] Sanctions annex date: the search is dated the day the broker checked it (user decision 26/11, item 38).
 - [ ] Union Payroll to have the supply chain liable-party wording confirmed by a tax adviser (brief section 2.1).
 - [ ] Enter the real PAYE reference and insurance details on real company records (the test records carry placeholder values).
 

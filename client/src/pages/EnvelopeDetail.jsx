@@ -72,14 +72,19 @@ export default function EnvelopeDetail() {
     (diligence.documents || []).some((doc) => doc.roleKey === record.roleKey)
   );
   const docsFor = (roleKey) => (diligence?.documents || []).filter((doc) => doc.roleKey === roleKey);
+  const searchedWhenChecked = (doc) => doc.virtual === "sanctions";
   const companyDate = (roleKey, field) => {
-    const values = new Set(docsFor(roleKey).map((doc) => checks[doc.key]?.[field] || ""));
+    const docs = docsFor(roleKey).filter((doc) => field === "checkedOn" || !searchedWhenChecked(doc));
+    const values = new Set(docs.map((doc) => checks[doc.key]?.[field] || ""));
     return values.size === 1 ? [...values][0] : "";
   };
   const setCompanyDate = (roleKey, field, value) =>
     setChecks((current) => {
       const next = { ...current };
-      for (const doc of docsFor(roleKey)) next[doc.key] = { ...next[doc.key], [field]: value };
+      for (const doc of docsFor(roleKey)) {
+        if (!searchedWhenChecked(doc)) next[doc.key] = { ...next[doc.key], [field]: value };
+        else if (field === "checkedOn") next[doc.key] = { receivedOn: value, checkedOn: value };
+      }
       return next;
     });
 
@@ -303,6 +308,31 @@ export default function EnvelopeDetail() {
             <div className="form-grid">
               {diligence.documents.map((doc) => {
                 const value = checks[doc.key] || { receivedOn: "", checkedOn: "" };
+                if (searchedWhenChecked(doc)) {
+                  return (
+                    <div key={doc.key}>
+                      <strong>
+                        {doc.roleLabel}: {doc.label}
+                      </strong>
+                      <div className="signer-row">
+                        <label>
+                          Searched and checked
+                          <input
+                            type="date"
+                            value={value.checkedOn}
+                            disabled={ddLocked}
+                            onChange={(e) =>
+                              setChecks((current) => ({
+                                ...current,
+                                [doc.key]: { receivedOn: e.target.value, checkedOn: e.target.value },
+                              }))
+                            }
+                          />
+                        </label>
+                      </div>
+                    </div>
+                  );
+                }
                 return (
                   <div key={doc.key}>
                     <strong>

@@ -481,14 +481,30 @@ export function packSources(envelopeId) {
   const saved = checksFor(envelopeId);
   for (const doc of documents) {
     const check = saved[doc.key];
-    doc.receivedOn = check?.received_on || "";
     doc.checkedOn = check?.checked_on || "";
+    doc.receivedOn = doc.virtual === "sanctions" ? doc.checkedOn : check?.received_on || "";
     doc.checkedBy = check?.checked_by || "";
     if (!doc.receivedOn || !doc.checkedOn) {
       missing.push(`${doc.roleLabel}: received and checked dates for ${doc.label}`);
     }
+    if (doc.virtual === "sanctions" && doc.checkedOn) {
+      const published = listPublishedOn(registryBundle(doc.partyId)?.sanctions?.listedOn);
+      if (published && doc.checkedOn < published) {
+        missing.push(
+          `${doc.roleLabel}: the sanctions search is dated before the list it used was published (${published.split("-").reverse().join("/")})`
+        );
+      }
+    }
   }
   return { documents, missing, records, byRole };
+}
+
+/** The list's report date ("24-Nov-2026") as YYYY-MM-DD. */
+function listPublishedOn(value) {
+  const ms = Date.parse(String(value || "").replace(/-/g, " "));
+  if (Number.isNaN(ms)) return "";
+  const day = new Date(ms);
+  return `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, "0")}-${String(day.getDate()).padStart(2, "0")}`;
 }
 
 function docFromFile(roleKey, label, record, file) {
@@ -529,8 +545,8 @@ export function saveDocChecks(envelopeId, checks, reviewer = "") {
   );
   for (const check of checks) {
     if (!allowed.has(check.key)) continue;
-    const received = String(check.receivedOn || "").trim();
     const checked = String(check.checkedOn || "").trim();
+    const received = check.key.startsWith("sanctions:") ? checked : String(check.receivedOn || "").trim();
     if (received && !/^\d{4}-\d{2}-\d{2}$/.test(received)) {
       throw new Error("Received date must be a calendar date");
     }
