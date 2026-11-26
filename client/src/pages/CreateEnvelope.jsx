@@ -28,12 +28,12 @@ export default function CreateEnvelope() {
   const [clients, setClients] = useState([]);
   const [suppliers, setSuppliers] = useState([]);
   const [library, setLibrary] = useState([]);
-  const [templates, setTemplates] = useState([]);
   const [entities, setEntities] = useState([]);
   const [broker, setBroker] = useState(null);
   const appliedBroker = useRef(false);
   const [libraryItem, setLibraryItem] = useState(null);
-  const [templateId, setTemplateId] = useState("");
+  const [contracts, setContracts] = useState(null);
+  const [scheduleIds, setScheduleIds] = useState([]);
   const [shape, setShape] = useState("");
   const [contractor, setContractor] = useState(emptyParty());
   const [client, setClient] = useState(emptyParty());
@@ -55,12 +55,25 @@ export default function CreateEnvelope() {
         setSuppliers(supplierRows);
         setLibrary(libraryRows);
         setEntities(boot.entities || []);
-        const contractTypes = (boot.templates || []).filter((item) => item.is_master || !item.industry);
-        setTemplates(contractTypes);
         setReady(true);
       })
       .catch((err) => setError(err.message));
   }, []);
+
+  const contractEntityId =
+    mode === "library" ? libraryItem?.entity_id : broker ? broker.entity_id || entities[0]?.id : null;
+  useEffect(() => {
+    setContracts(null);
+    if (!contractEntityId) return;
+    api
+      .brokerContracts(contractEntityId)
+      .then(setContracts)
+      .catch((err) => setError(err.message));
+  }, [contractEntityId]);
+
+  const schedulesFor = (choice) =>
+    (contracts?.schedules || []).filter((item) => !item.party_shape || item.party_shape === choice);
+  const contractFor = (choice) => contracts?.masters?.[choice] || contracts?.placeholder || null;
 
   const presetBrokerId = params.get("broker") || "";
   const brokerSetup = (entityId) => {
@@ -79,9 +92,17 @@ export default function CreateEnvelope() {
 
   const steps =
     mode === "library"
-      ? ["Library", "3-way or 4-way", "Other parties"]
-      : ["Broker", "Contract", "3-way or 4-way", "Other parties"];
+      ? ["Library", "3-way or 4-way", "Schedules", "Other parties"]
+      : ["Broker", "3-way or 4-way", "Schedules", "Other parties"];
+  const onShape = step === 1;
+  const onSchedules = step === 2;
   const onParties = step === steps.length - 1;
+
+  function chooseShape(choice) {
+    setShape(choice);
+    setScheduleIds(schedulesFor(choice).map((item) => item.id));
+    setStep(2);
+  }
 
   function back() {
     setError("");
@@ -107,7 +128,7 @@ export default function CreateEnvelope() {
         const entityId = broker.entity_id || entities[0]?.id;
         const existing = library.find(
           (item) =>
-            item.template_id === templateId &&
+            item.entity_id === entityId &&
             item.broker.signer_email === broker.signer_email &&
             item.broker.company_name === broker.company_name &&
             item.contractor.signer_email === contractor.signer_email &&
@@ -118,7 +139,6 @@ export default function CreateEnvelope() {
         } else {
           const saved = await api.saveLibrary({
             name: `${broker.company_name} / ${contractor.company_name}`,
-            templateId,
             entityId,
             broker: { ...broker, entityId },
             contractor,
@@ -132,6 +152,7 @@ export default function CreateEnvelope() {
         preparedOn: todayISO(),
         client,
         supplier: shape === "four" ? supplier : null,
+        appendixIds: scheduleIds,
       });
       navigate(`/envelopes/${envelope.id}`);
     } catch (err) {
@@ -175,7 +196,7 @@ export default function CreateEnvelope() {
                   {sampleMark(item)}
                 </strong>
                 <span>
-                  {item.broker.company_name} and {item.contractor.company_name} · {item.template_name}
+                  {item.broker.company_name} and {item.contractor.company_name}
                 </span>
               </button>
             ))}
@@ -220,52 +241,73 @@ export default function CreateEnvelope() {
         </div>
       ) : null}
 
-      {mode === "new" && step === 1 ? (
-        <div className="choice-grid">
-          {templates.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              className="choice-card"
-              onClick={() => {
-                setTemplateId(item.id);
-                setStep(2);
-              }}
-            >
-              <strong>{item.name}</strong>
-              {item.description ? <span>{item.description}</span> : null}
-            </button>
-          ))}
-          {!templates.length ? <div className="empty">No contract type is set up yet.</div> : null}
-        </div>
+      {onShape ? (
+        contracts ? (
+          <>
+          <div className="choice-grid">
+            {[
+              ["three", "3-way", "Contractor, broker and client. This is the usual contract."],
+              ["four", "4-way", "Those three, plus a supplier."],
+            ].map(([choice, label, text]) => {
+              const contract = contractFor(choice);
+              return (
+                <button
+                  key={choice}
+                  type="button"
+                  className="choice-card"
+                  disabled={!contract}
+                  onClick={() => chooseShape(choice)}
+                >
+                  <strong>{label}</strong>
+                  <span>{text}</span>
+                  <span className={contract?.is_placeholder || !contract ? "error" : "meta"}>
+                    {!contract
+                      ? `No ${label} contract uploaded for this broker`
+                      : contract.is_placeholder
+                        ? `No ${label} contract uploaded for this broker yet: uses the placeholder`
+                        : contract.name}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+          <p className="muted">
+            <Link to={`/brokers/${contractEntityId}`}>This broker’s contracts and schedules</Link>
+          </p>
+          </>
+        ) : (
+          <p className="muted">Loading…</p>
+        )
       ) : null}
 
-      {((mode === "new" && step === 2) || (mode === "library" && step === 1)) && (
-        <div className="choice-grid">
-          <button
-            type="button"
-            className="choice-card"
-            onClick={() => {
-              setShape("three");
-              setStep((current) => current + 1);
-            }}
-          >
-            <strong>3-way</strong>
-            <span>Contractor, broker and client. This is the usual contract.</span>
-          </button>
-          <button
-            type="button"
-            className="choice-card"
-            onClick={() => {
-              setShape("four");
-              setStep((current) => current + 1);
-            }}
-          >
-            <strong>4-way</strong>
-            <span>Those three, plus a supplier.</span>
+      {onSchedules ? (
+        <div className="panel form-grid">
+          {schedulesFor(shape).length ? (
+            schedulesFor(shape).map((item) => (
+              <label key={item.id} className="consent">
+                <input
+                  type="checkbox"
+                  checked={scheduleIds.includes(item.id)}
+                  onChange={(e) =>
+                    setScheduleIds((current) =>
+                      e.target.checked ? [...current, item.id] : current.filter((value) => value !== item.id)
+                    )
+                  }
+                />
+                <span>{item.name}</span>
+              </label>
+            ))
+          ) : (
+            <p className="muted">
+              This broker has no {shape === "four" ? "4-way" : "3-way"} schedules.{" "}
+              <Link to={`/brokers/${contractEntityId}`}>Add one</Link>
+            </p>
+          )}
+          <button className="btn" type="button" onClick={() => setStep(3)}>
+            Continue
           </button>
         </div>
-      )}
+      ) : null}
 
       {onParties ? (
         <form className="panel form-grid" onSubmit={onSubmit}>
@@ -324,12 +366,7 @@ export default function CreateEnvelope() {
 
 function heading(mode, step) {
   if (mode === "library") {
-    return ["Which library template?", "Is this 3-way or 4-way?", "Who else signs?"][step];
+    return ["Which library template?", "Is this 3-way or 4-way?", "Which schedules?", "Who else signs?"][step];
   }
-  return [
-    "Which broker?",
-    "Which contract?",
-    "Is this 3-way or 4-way?",
-    "Who else signs?",
-  ][step];
+  return ["Which broker?", "Is this 3-way or 4-way?", "Which schedules?", "Who else signs?"][step];
 }

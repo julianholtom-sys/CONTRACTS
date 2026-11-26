@@ -5,7 +5,7 @@ import { readBytes, writeBytes } from "./storage.js";
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import { migrate } from "./migrate.js";
 import { ensureAdminPassword } from "./auth.js";
-import { ensureFallbackSupplierFields, ensureStoredDateFields } from "./documentFields.js";
+import { applyMasterPdfFields, ensureFallbackSupplierFields, ensureStoredDateFields } from "./documentFields.js";
 import { ensureVerifyToken } from "./domainVerify.js";
 
 async function makePdf({ title, subtitle, lines = [], footer }) {
@@ -265,11 +265,11 @@ async function ensureEntityBrand(entityId, brandSpec) {
 }
 
 async function ensureSharedCatalog() {
-  // One master contract always sent; industry needs are optional appendices.
-  let master = db.prepare("SELECT * FROM templates WHERE is_master = 1 LIMIT 1").get();
+  // The shared placeholder contract; each broker's own 3-way and 4-way contracts sit beside it.
+  let master = db.prepare("SELECT * FROM templates WHERE is_master = 1 AND entity_id IS NULL LIMIT 1").get();
   if (!master) {
     const byName = db
-      .prepare("SELECT * FROM templates WHERE name = ? LIMIT 1")
+      .prepare("SELECT * FROM templates WHERE name = ? AND entity_id IS NULL LIMIT 1")
       .get("Master Services Agreement");
     if (byName) {
       db.prepare(
@@ -323,12 +323,12 @@ async function ensureSharedCatalog() {
     ).run("Core three-party agreement included on every contract", master.id);
   }
 
-  // Demote legacy per-industry “contracts” — those belong as appendices, not masters.
+  // Demote legacy per-industry “contracts”; a broker's own contracts carry a party_shape.
   db.prepare(
     `UPDATE templates SET is_active = 0, is_master = 0
-     WHERE id != ? AND (industry IS NOT NULL OR is_master = 0)`
+     WHERE id != ? AND party_shape IS NULL AND (industry IS NOT NULL OR is_master = 0)`
   ).run(master.id);
-  db.prepare(`UPDATE templates SET is_master = 0 WHERE id != ?`).run(master.id);
+  db.prepare(`UPDATE templates SET is_master = 0 WHERE id != ? AND party_shape IS NULL`).run(master.id);
 
   const roleCount = db
     .prepare("SELECT COUNT(*) AS c FROM template_roles WHERE template_id = ?")
@@ -349,54 +349,8 @@ async function ensureSharedCatalog() {
     }
   }
 
-  const appendixDefs = [
-    {
-      industry: "construction",
-      name: "Construction H&S Appendix",
-      lines: ["Site induction", "PPE requirements", "Permit to work"],
-    },
-    {
-      industry: "construction",
-      name: "Construction Payment Schedule",
-      lines: ["Valuation dates", "Retention", "Pay-less notices"],
-    },
-    {
-      industry: "healthcare",
-      name: "Clinical Governance Appendix",
-      lines: ["Safeguarding", "Incident reporting", "Data retention"],
-    },
-    {
-      industry: "technology",
-      name: "Data Processing Appendix",
-      lines: ["Subprocessors", "Security controls", "Breach notification"],
-    },
-  ];
-  for (const a of appendixDefs) {
-    const exists = db
-      .prepare("SELECT id FROM appendices WHERE name = ? AND industry = ?")
-      .get(a.name, a.industry);
-    if (exists) continue;
-    const pdf = await makePdf({
-      title: a.name,
-      subtitle: `Optional ${a.industry} appendix`,
-      lines: a.lines,
-    });
-    const stored = writeBytes("uploads", `${a.industry}-${a.name}.pdf`, pdf);
-    const appendixId = newId();
-    db.prepare(
-      `INSERT INTO appendices (
-        id, entity_id, industry, name, description, storage_ref, is_active, created_at
-      ) VALUES (?, NULL, ?, ?, ?, ?, 1, ?)`
-    ).run(
-      appendixId,
-      a.industry,
-      a.name,
-      `Optional industry appendix for ${a.industry}`,
-      stored.storageRef,
-      now()
-    );
-    await applyAppendixPdfFields(appendixId, pdf);
-  }
+  // Schedules now belong to a broker; the old shared demo appendices are retired.
+  db.prepare("UPDATE appendices SET is_active = 0 WHERE entity_id IS NULL").run();
 }
 
 const COMPANY_DEFS = [

@@ -8,7 +8,6 @@ export default function Library() {
   const [records, setRecords] = useState({ broker: [], contractor: [] });
   const [saved, setSaved] = useState([]);
   const [name, setName] = useState("");
-  const [templateId, setTemplateId] = useState("");
   const [entityId, setEntityId] = useState("");
   const [broker, setBroker] = useState(emptyParty());
   const [contractor, setContractor] = useState(emptyParty());
@@ -25,7 +24,6 @@ export default function Library() {
     setBootstrap(boot);
     setSaved(library);
     setRecords({ broker: brokers, contractor: contractors });
-    setTemplateId((current) => current || boot.masterTemplate?.id || boot.templates?.[0]?.id || "");
     setEntityId((current) => current || boot.entities?.[0]?.id || "");
   }
 
@@ -52,7 +50,6 @@ export default function Library() {
     try {
       await api.saveLibrary({
         name,
-        templateId,
         entityId,
         broker,
         contractor,
@@ -75,8 +72,9 @@ export default function Library() {
       <section className="hero-panel">
         <h1>Library</h1>
         <p>
-          Pair a broker with a contractor. That pairing chooses the contract and the
-          cover. Pull it up later, then name the client and, when needed, the supplier.
+          Pair a broker with a contractor. The broker supplies the cover and the
+          contracts. Pull it up later, choose 3-way or 4-way, then name the client and,
+          on a 4-way, the supplier.
         </p>
       </section>
 
@@ -93,7 +91,7 @@ export default function Library() {
                   {item.is_sample ? <span className="badge draft">Sample</span> : null}
                 </strong>
                 <span>
-                  {item.broker.company_name} / {item.contractor.company_name} · {item.template_name}
+                  {item.broker.company_name} / {item.contractor.company_name}
                   {" · "}
                   Cover {item.cover.front || "not set"}
                 </span>
@@ -119,16 +117,6 @@ export default function Library() {
             placeholder="e.g. Bailey, Northwind, Casey & Nina North (sample)"
             required
           />
-        </label>
-        <label>
-          Contract
-          <select value={templateId} onChange={(e) => setTemplateId(e.target.value)} required>
-            {(bootstrap.templates || []).map((template) => (
-              <option key={template.id} value={template.id}>
-                {template.name}
-              </option>
-            ))}
-          </select>
         </label>
         <label>
           Cover company

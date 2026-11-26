@@ -86,6 +86,16 @@ import {
   getSignField,
   listAppendixFields,
 } from "./documentFields.js";
+import {
+  addSchedule,
+  brokerContracts,
+  contractTemplateFor,
+  deleteBrokerMaster,
+  saveBrokerMaster,
+  scheduleShape,
+  schedulesForContract,
+  updateBrokerMaster,
+} from "./contractTemplates.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 8787);
@@ -1010,6 +1020,69 @@ app.get("/api/templates/:id", (req, res) => {
   res.json({ ...t, is_master: Boolean(t.is_master), roles, fields, versions });
 });
 
+app.get("/api/brokers/:entityId/contracts", (req, res) => {
+  try {
+    res.json(brokerContracts(req.params.entityId));
+  } catch (err) {
+    res.status(404).json({ error: err.message });
+  }
+});
+
+app.post("/api/brokers/:entityId/contracts/:shape/file", upload.single("file"), async (req, res) => {
+  try {
+    res.json(
+      await saveBrokerMaster(req.params.entityId, req.params.shape, req.file, {
+        name: req.body?.name,
+        description: req.body?.description,
+      })
+    );
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.patch("/api/brokers/:entityId/contracts/:shape", (req, res) => {
+  try {
+    res.json(updateBrokerMaster(req.params.entityId, req.params.shape, req.body || {}));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.get("/api/brokers/:entityId/contracts/:shape/file", (req, res) => {
+  try {
+    const template = brokerContracts(req.params.entityId).masters[req.params.shape];
+    if (!template) return res.status(404).json({ error: "No contract uploaded" });
+    const row = db.prepare("SELECT source_url FROM templates WHERE id = ?").get(template.id);
+    sendStoredPdf(res, row.source_url, template.file_name);
+  } catch (err) {
+    res.status(404).json({ error: err.message });
+  }
+});
+
+app.delete("/api/brokers/:entityId/contracts/:shape", (req, res) => {
+  try {
+    deleteBrokerMaster(req.params.entityId, req.params.shape);
+    res.status(204).end();
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post("/api/brokers/:entityId/schedules", upload.single("file"), async (req, res) => {
+  try {
+    res.status(201).json(
+      await addSchedule(
+        req.params.entityId,
+        { name: req.body?.name, description: req.body?.description, shape: req.body?.shape },
+        req.file
+      )
+    );
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 app.get("/api/appendices", (req, res) => {
   const industry = req.query.industry || null;
   res.json(
@@ -1025,56 +1098,23 @@ app.get("/api/appendices", (req, res) => {
   );
 });
 
-app.post("/api/appendices", upload.single("file"), async (req, res) => {
-  try {
-    const name = req.body.name;
-    const industry = req.body.industry;
-    if (!name || !industry) {
-      return res.status(400).json({ error: "name and industry required" });
-    }
-    if (!req.file) return res.status(400).json({ error: "PDF file required" });
-    const stored = writeBytes(
-      "uploads",
-      `appendix-${industry}-${Date.now()}-${req.file.originalname}`,
-      req.file.buffer
-    );
-    const id = newId();
-    db.prepare(
-      `INSERT INTO appendices (
-        id, entity_id, industry, name, description, storage_ref, is_active, created_at
-      ) VALUES (?, NULL, ?, ?, ?, ?, 1, ?)`
-    ).run(
-      id,
-      industry,
-      name,
-      req.body.description || null,
-      stored.storageRef,
-      now()
-    );
-    await applyAppendixPdfFields(id, req.file.buffer);
-    const row = db.prepare("SELECT * FROM appendices WHERE id = ?").get(id);
-    const fields = listAppendixFields(id);
-    res.status(201).json({ ...row, fields, needs_signing: fields.length > 0 });
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
-});
-
 app.patch("/api/appendices/:id", (req, res) => {
   const row = db.prepare("SELECT * FROM appendices WHERE id = ?").get(req.params.id);
   if (!row) return res.status(404).json({ error: "Not found" });
   const body = req.body || {};
+  const name = body.name === undefined ? row.name : String(body.name).trim();
+  if (!name) return res.status(400).json({ error: "Give the schedule a name" });
   db.prepare(
     `UPDATE appendices SET
       name = ?,
-      industry = ?,
       description = ?,
+      party_shape = ?,
       is_active = ?
      WHERE id = ?`
   ).run(
-    body.name ?? row.name,
-    body.industry ?? row.industry,
+    name,
     body.description ?? row.description,
+    body.shape === undefined ? row.party_shape : scheduleShape(body.shape),
     body.is_active === undefined ? row.is_active : body.is_active ? 1 : 0,
     row.id
   );
@@ -1147,43 +1187,34 @@ app.post("/api/envelopes", (req, res) => {
       entityId,
       title,
       preparedOn,
-      industry,
       appendixIds = [],
       externalClientRef,
       parties,
       reminderFrequency = "none",
     } = req.body || {};
-    let template = getMasterTemplate();
     let shape = req.body?.shape === "four" ? "four" : "three";
     if (req.body?.libraryId) {
       const built = contractFromLibrary(req.body);
       entityId = built.entityId;
       parties = built.parties;
       shape = built.shape;
-      template = db.prepare("SELECT * FROM templates WHERE id = ?").get(built.templateId);
     }
     const entity = db
       .prepare("SELECT * FROM entities WHERE id = ? AND is_active = 1")
       .get(entityId);
     if (!entity) return res.status(400).json({ error: "Unknown entity" });
-    if (!template) return res.status(400).json({ error: "Master contract is not configured" });
+    const template = contractTemplateFor(entityId, shape);
+    if (!template) {
+      return res.status(400).json({
+        error: `Upload a ${shape === "four" ? "4-way" : "3-way"} contract for ${entity.display_name} first`,
+      });
+    }
     if (!preparedOn || !/^\d{4}-\d{2}-\d{2}$/.test(preparedOn)) {
       return res.status(400).json({ error: "preparedOn (YYYY-MM-DD) is required" });
     }
-    const selectedIndustry = industry || null;
-    const requestedAppendixIds = Array.isArray(appendixIds) ? appendixIds : [];
-    const available = selectedIndustry
-      ? listAppendices({ industry: selectedIndustry, entityId })
-      : [];
-    const availableIds = new Set(available.map((a) => a.id));
-    for (const id of requestedAppendixIds) {
-      if (!availableIds.has(id)) {
-        return res.status(400).json({
-          error: `Appendix ${id} is not available for industry ${selectedIndustry || "(none)"}`,
-        });
-      }
-    }
-    const selectedAppendices = listAppendices({ ids: requestedAppendixIds });
+    const selectedIndustry = null;
+    const selectedAppendices = schedulesForContract(entityId, shape, appendixIds);
+    const requestedAppendixIds = selectedAppendices.map((a) => a.id);
     const brand = resolveBrandPack(entityId, {
       industry: selectedIndustry,
       appendixIds: requestedAppendixIds,

@@ -5,6 +5,7 @@ import { emptyParty, PartyFields } from "../PartyFields.jsx";
 import ConfirmDialog from "../ConfirmDialog.jsx";
 import FileSlot from "../FileSlot.jsx";
 import SavedSignature from "../SavedSignature.jsx";
+import BrokerContracts from "../BrokerContracts.jsx";
 import ComplianceCompany from "./ComplianceCompany.jsx";
 
 const emptyForm = {
@@ -482,6 +483,11 @@ export default function CompanySetup() {
             <p className="muted">No active files in the library.</p>
           )}
         </section>
+      ) : null}
+      {!isNew ? (
+        <div style={{ marginTop: "1rem" }}>
+          <BrokerContracts entityId={id} brokerName={form.display_name || "This broker"} />
+        </div>
       ) : null}
       </>
       ) : (

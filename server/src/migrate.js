@@ -49,6 +49,7 @@ export function migrate() {
   ensureColumn("templates", "industry", "TEXT");
   ensureColumn("templates", "description", "TEXT");
   ensureColumn("templates", "is_master", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn("templates", "party_shape", "TEXT");
   ensureColumn("envelopes", "prepared_on", "TEXT");
   ensureColumn("envelopes", "issued_at", "TEXT");
   ensureColumn("envelopes", "industry", "TEXT");
@@ -128,6 +129,7 @@ export function migrate() {
       created_at TEXT NOT NULL
     );
   `);
+  ensureColumn("appendices", "party_shape", "TEXT");
 
   db.exec(`DROP TABLE IF EXISTS entity_documents`);
 
@@ -293,8 +295,25 @@ export function migrate() {
   `);
 
   db.exec(`
-    CREATE TABLE IF NOT EXISTS envelope_fields (
-      id TEXT PRIMARY KEY,
+    CREATE TABLE IF NOT EXISTS envelope_fields (${ENVELOPE_FIELDS_COLUMNS});
+  `);
+  scopeEnvelopeFieldIds();
+
+  db.prepare(
+    `UPDATE email_templates
+     SET body_html = ?, body_text = ?, updated_at = ?
+     WHERE template_type = 'completion'
+       AND (body_text LIKE '%audit sheet%' OR body_text LIKE '%audit trail%' OR body_text LIKE '%IP address%')`
+  ).run(
+    "<p>{{envelope_title}} is complete.</p><p>The completed PDF binds every requested attachment.</p>",
+    "{{envelope_title}} is complete. The completed PDF binds every requested attachment.",
+    new Date().toISOString()
+  );
+}
+
+// A field keeps its template or schedule field id, so ids repeat across contracts and are unique per contract.
+const ENVELOPE_FIELDS_COLUMNS = `
+      id TEXT NOT NULL,
       envelope_id TEXT NOT NULL REFERENCES envelopes(id),
       role_id TEXT NOT NULL REFERENCES template_roles(id),
       source TEXT NOT NULL CHECK (source IN ('master','appendix')),
@@ -309,20 +328,30 @@ export function migrate() {
       x REAL NOT NULL,
       y REAL NOT NULL,
       w REAL NOT NULL,
-      h REAL NOT NULL
-    );
-  `);
+      h REAL NOT NULL,
+      PRIMARY KEY (envelope_id, id)
+    `;
 
-  db.prepare(
-    `UPDATE email_templates
-     SET body_html = ?, body_text = ?, updated_at = ?
-     WHERE template_type = 'completion'
-       AND (body_text LIKE '%audit sheet%' OR body_text LIKE '%audit trail%' OR body_text LIKE '%IP address%')`
-  ).run(
-    "<p>{{envelope_title}} is complete.</p><p>The completed PDF binds every requested attachment.</p>",
-    "{{envelope_title}} is complete. The completed PDF binds every requested attachment.",
-    new Date().toISOString()
-  );
+function scopeEnvelopeFieldIds() {
+  const row = db
+    .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'envelope_fields'")
+    .get();
+  if (!row?.sql || /PRIMARY KEY\s*\(\s*envelope_id\s*,\s*id\s*\)/i.test(row.sql)) return;
+  const columns = tableColumns("envelope_fields").join(", ");
+  db.exec("PRAGMA foreign_keys = OFF");
+  db.exec("BEGIN");
+  try {
+    db.exec(`CREATE TABLE envelope_fields_new (${ENVELOPE_FIELDS_COLUMNS})`);
+    db.exec(`INSERT INTO envelope_fields_new (${columns}) SELECT ${columns} FROM envelope_fields`);
+    db.exec("DROP TABLE envelope_fields");
+    db.exec("ALTER TABLE envelope_fields_new RENAME TO envelope_fields");
+    db.exec("COMMIT");
+  } catch (err) {
+    db.exec("ROLLBACK");
+    throw err;
+  } finally {
+    db.exec("PRAGMA foreign_keys = ON");
+  }
 }
 
 function widenRoleKey(table, createSql) {

@@ -1,6 +1,7 @@
 import { db, newId, now } from "./db.js";
 import { ensureStoredDateFields } from "./documentFields.js";
 import { resolveBrandPack } from "./bake.js";
+import { contractTemplateFor } from "./contractTemplates.js";
 import { dropSignatureIfSignerChanged, signatureView } from "./savedSignatures.js";
 
 const ROLES = new Set(["director", "authorised_signatory"]);
@@ -226,13 +227,14 @@ export function contractFromLibrary(input) {
 export function saveLibraryTemplate(input) {
   const name = String(input?.name || "").trim();
   if (!name) throw new Error("Give this library template a name");
-  const template = db.prepare("SELECT * FROM templates WHERE id = ? AND is_active = 1").get(input?.templateId);
-  if (!template) throw new Error("Choose the contract template");
   const entity = db.prepare("SELECT * FROM entities WHERE id = ? AND is_active = 1").get(input?.entityId);
   if (!entity) throw new Error("Choose the broker company that supplies the cover");
   const broker = saveDirectoryParty({ ...input.broker, entityId: entity.id }, "broker");
   const contractor = saveDirectoryParty(input.contractor, "contractor");
   const coverEntityId = broker.entity_id || entity.id;
+  // The contract itself is chosen by broker and shape when a contract is created; this is a reference only.
+  const template = contractTemplateFor(coverEntityId, "three") || contractTemplateFor(coverEntityId, "four");
+  if (!template) throw new Error(`Upload a contract for ${entity.display_name} first`);
   ensureStoredDateFields(template.id);
   const id = newId();
   db.prepare(

@@ -124,12 +124,13 @@ export function resolveBrandPack(entityId, { industry = null, appendixIds = [] }
   return { front, back, logo, industry: industry || null, appendices };
 }
 
+/** The shared placeholder contract, used for a broker that has no contract of its own for that shape. */
 export function getMasterTemplate({ includeInactive = false } = {}) {
   if (includeInactive) {
     return db
       .prepare(
         `SELECT * FROM templates
-         WHERE is_master = 1
+         WHERE is_master = 1 AND entity_id IS NULL
          ORDER BY is_active DESC, created_at ASC LIMIT 1`
       )
       .get();
@@ -138,12 +139,16 @@ export function getMasterTemplate({ includeInactive = false } = {}) {
     db
       .prepare(
         `SELECT * FROM templates
-         WHERE is_master = 1 AND is_active = 1
+         WHERE is_master = 1 AND is_active = 1 AND entity_id IS NULL
          ORDER BY created_at ASC LIMIT 1`
       )
       .get() ||
     db
-      .prepare(`SELECT * FROM templates WHERE is_active = 1 ORDER BY created_at ASC LIMIT 1`)
+      .prepare(
+        `SELECT * FROM templates
+         WHERE is_active = 1 AND entity_id IS NULL AND party_shape IS NULL
+         ORDER BY created_at ASC LIMIT 1`
+      )
       .get()
   );
 }

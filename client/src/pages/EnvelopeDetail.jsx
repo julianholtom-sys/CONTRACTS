@@ -767,7 +767,7 @@ export default function EnvelopeDetail() {
             <span>{envelope.auto_pack?.logo?.name || "—"}</span>
           </li>
           <li>
-            <strong>Appendices</strong>
+            <strong>Schedules</strong>
             <span>
               {(envelope.auto_pack?.appendices || []).map((a) => a.name).join(", ") || "—"}
             </span>
