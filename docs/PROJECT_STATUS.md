@@ -245,7 +245,7 @@ Rules of the road:
 - [x] Checked on Union’s real Terms of Business (item 44): no logo or legal footer stamped on a broker’s own contract, dates line clear of the footer, one signature box per party on the execution page. Check E Street’s real contract the same way when it arrives.
 - [x] Signature page placed after the terms and schedules, before the back cover; bound documents styled like the pack (item 43).
 - [x] Union’s 4-way Terms of Business tested (item 45): two-column execution page, personal guarantees signed with the company signatory’s saved signature.
-- [ ] Confirm with the user: the Guarantor Director is assumed to be the company’s signatory. If a guarantor can be someone else, the record needs a separate guarantor name and signature.
+- [x] The Guarantor Director is always the company’s signatory (user decision 26/11): no separate guarantor name or signature on the record.
 - [x] Due diligence declarations and director’s certificate — signed by the broker’s director in the pack; the signed pack is added to the contract at issue.
 - [x] Union Payroll broker library record: no longer a sample, name spacing fixed.
 - [x] Client company number: Companies House details fill the client’s contract fields (no documents fetched).
