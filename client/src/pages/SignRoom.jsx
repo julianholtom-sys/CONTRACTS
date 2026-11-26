@@ -68,7 +68,6 @@ export default function SignRoom() {
       await api.sign(token, {
         signatureDataUrl: signature.dataUrl,
         method: signature.method,
-        font: signature.font,
         consent,
         typedName: signature.text || session.party.signer_name,
       });

@@ -550,9 +550,9 @@ const CERT_LABEL_W = 150;
 const CERT_ROW = 22;
 const CERT_SIGNATURE_ROW = 52;
 const CERT_TABLE_H = CERT_ROW * 4 + CERT_SIGNATURE_ROW;
-const CERT_EVIDENCE_H = 44;
+const CERT_AFTER_H = 16;
 
-/** Where signing stamps the signature, the date and the audit line, for a signature table starting at `top`. */
+/** Where signing stamps the signature and the date, for a signature table starting at `top`. */
 export function certificateSignature(top) {
   return {
     x: MARGIN + CERT_LABEL_W + 4,
@@ -561,9 +561,6 @@ export function certificateSignature(top) {
     h: CERT_SIGNATURE_ROW - 10,
     dateX: MARGIN + CERT_LABEL_W + 6,
     dateY: top - CERT_TABLE_H + 7.5,
-    evidenceX: MARGIN,
-    evidenceY: top - CERT_TABLE_H - 14,
-    evidenceW: CONTENT_W,
   };
 }
 
@@ -619,7 +616,7 @@ function addCertificate(writer, letter, { entity, brokerLegal, broker, details, 
     lineCount(intro) * 13.5 + 8 +
     lineCount(opening) * 13.5 + 6 +
     statements.reduce((sum, statement) => sum + lineCount(statement, 20) * 13.5 + 5, 0) +
-    10 + CERT_TABLE_H + CERT_EVIDENCE_H;
+    10 + CERT_TABLE_H + CERT_AFTER_H;
   if (!writer.page || writer.y - needed < BODY_BOTTOM) writer.newPage();
 
   writer.part(`Part ${letter} — Director’s certificate`);
@@ -662,7 +659,7 @@ function addCertificate(writer, letter, { entity, brokerLegal, broker, details, 
     }
     top -= height;
   }
-  writer.y = certTop - CERT_TABLE_H - CERT_EVIDENCE_H;
+  writer.y = certTop - CERT_TABLE_H - CERT_AFTER_H;
   return certTop;
 }
 

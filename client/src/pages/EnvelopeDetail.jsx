@@ -2,35 +2,6 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../api.js";
 
-const EVENT_LABELS = {
-  envelope_created: "Contract created",
-  envelope_baked: "Contract assembled",
-  invitation_sent: "Invitation sent",
-  invitation_resent: "Invitation reissued",
-  reminder_sent: "Reminder sent",
-  document_viewed: "Opened the contract",
-  field_completed: "Completed a field",
-  evidence_uploaded: "Attached a supporting document",
-  dd_file_uploaded: "Added a due diligence document",
-  dd_compiled: "Compiled the due diligence pack",
-  dd_request_sent: "Due diligence request emailed",
-  dd_review_sent: "Broker asked to sign the due diligence pack",
-  dd_submitted: "Submitted due diligence documents",
-  dd_signed: "Broker signed the due diligence pack",
-  dd_validated: "Broker signed the due diligence pack",
-  consent_given: "Gave electronic-signature consent",
-  signed: "Signed",
-  declined: "Declined",
-  voided: "Voided",
-  completed: "All parties complete",
-  copies_distributed: "Completed copies recorded",
-  turn_notification_sent: "Next-party notice sent",
-};
-
-function eventLabel(type) {
-  return EVENT_LABELS[type] || String(type || "").replace(/_/g, " ");
-}
-
 export default function EnvelopeDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -38,7 +9,6 @@ export default function EnvelopeDetail() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
   const [links, setLinks] = useState({});
-  const [chain, setChain] = useState(null);
   const [nameDraft, setNameDraft] = useState({});
   const [checks, setChecks] = useState({});
   const [companyDates, setCompanyDates] = useState({});
@@ -60,7 +30,6 @@ export default function EnvelopeDetail() {
     }
     setChecks(next);
     setCompanyDates(byCompany);
-    setChain(await api.verifyEvents(id));
   }
 
   useEffect(() => {
@@ -129,9 +98,8 @@ export default function EnvelopeDetail() {
         ) : null}
         {envelope.status === "completed" ? (
           <p className="muted">
-            The completed PDF binds every requested attachment, then ends with the
-            audit trail: who received the file and when they signed. Every party
-            receives that same bound copy.
+            The completed PDF binds every requested attachment. Every party receives
+            that same bound copy.
           </p>
         ) : null}
       </section>
@@ -162,14 +130,9 @@ export default function EnvelopeDetail() {
           </a>
         ) : null}
         {envelope.status === "completed" ? (
-          <>
-            <a className="btn secondary" href={api.documentUrl(id, "completed")} target="_blank" rel="noreferrer">
-              Completed PDF
-            </a>
-            <a className="btn secondary" href={api.documentUrl(id, "certificate")} target="_blank" rel="noreferrer">
-              Audit trail
-            </a>
-          </>
+          <a className="btn secondary" href={api.documentUrl(id, "completed")} target="_blank" rel="noreferrer">
+            Completed PDF
+          </a>
         ) : null}
         <button
           className="btn danger"
@@ -190,8 +153,7 @@ export default function EnvelopeDetail() {
           {diligence.validatedAt ? (
             <p className="meta">
               Broker signed {new Date(diligence.validatedAt).toLocaleString("en-GB")}
-              {diligence.signedName ? ` · ${diligence.signedName}` : ""}
-              {diligence.signedIp ? ` · IP ${diligence.signedIp}` : ""}.
+              {diligence.signedName ? ` · ${diligence.signedName}` : ""}.
             </p>
           ) : diligence.compiledAt ? (
             <p className="meta">
@@ -599,42 +561,18 @@ export default function EnvelopeDetail() {
           </div>
         </section>
 
-        <div className="grid">
-          <section className="panel">
-            <h2>Audit chain</h2>
-            {chain ? (
-              <p className={`meta ${chain.ok ? "" : "error"}`}>
-                {chain.ok
-                  ? `Verified · ${chain.checked} events`
-                  : `BROKEN · ${chain.broken.length} issues`}
-              </p>
-            ) : null}
-            <ul className="audit-list">
-              {[...(envelope.events || [])].reverse().map((entry) => (
-                <li key={entry.id}>
-                  <strong>{eventLabel(entry.event_type)}</strong>
-                  <span className="muted">{new Date(entry.created_at).toLocaleString("en-GB")}</span>
-                  <span className="muted">
-                    {entry.actor}
-                    {entry.ip ? ` · IP ${entry.ip}` : ""}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </section>
-          <section className="panel">
-            <h2>Local email outbox</h2>
-            <ul className="audit-list">
-              {(envelope.emails || []).map((mail) => (
-                <li key={mail.id}>
-                  <strong>{mail.template_type}</strong>
-                  <span className="muted">{mail.to_address}</span>
-                  <span>{mail.subject}</span>
-                </li>
-              ))}
-            </ul>
-          </section>
-        </div>
+        <section className="panel">
+          <h2>Local email outbox</h2>
+          <ul className="audit-list">
+            {(envelope.emails || []).map((mail) => (
+              <li key={mail.id}>
+                <strong>{mail.template_type}</strong>
+                <span className="muted">{mail.to_address}</span>
+                <span>{mail.subject}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
       </div>
     </div>
   );

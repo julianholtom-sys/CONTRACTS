@@ -122,7 +122,7 @@ export default function SignaturePad({ onChange, defaultName = "" }) {
     let live = true;
     const font = SIGNATURE_FONTS[fontIndex];
     typedSignature(text, font).then((dataUrl) => {
-      if (live) setTyped(dataUrl ? { dataUrl, method: "typed", font: font.family, text } : null);
+      if (live) setTyped(dataUrl ? { dataUrl, method: "typed", text } : null);
     });
     return () => {
       live = false;

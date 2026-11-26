@@ -93,7 +93,6 @@ export default function DiligenceRoom() {
                       api.signDiligence(token, {
                         signatureDataUrl: signature.dataUrl,
                         method: signature.method,
-                        font: signature.font,
                         typedName: session.party.signer_name,
                         consent,
                       })

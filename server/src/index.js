@@ -4,7 +4,7 @@ import multer from "multer";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { db, newId, now, sha256, parseJson } from "./db.js";
-import { appendEvent, listEvents, verifyEventChain } from "./events.js";
+import { appendEvent } from "./events.js";
 import {
   bakeEnvelope,
   bakeInSignedPack,
@@ -237,7 +237,6 @@ function getEnvelopeBundle(id) {
   const documents = db
     .prepare("SELECT * FROM documents WHERE envelope_id = ? ORDER BY created_at ASC")
     .all(id);
-  const events = listEvents(id);
   const emails = listOutboundEmails(id);
   const actionable = getActionableParty(id);
   const template = envelope.template_id
@@ -264,7 +263,6 @@ function getEnvelopeBundle(id) {
     template,
     parties,
     documents,
-    events,
     emails,
     actionable_party_id: actionable?.id || null,
     auto_pack: {
@@ -1310,10 +1308,6 @@ app.get("/api/envelopes/:id/documents/:kind", (req, res) => {
   res.send(readBytes(doc.storage_ref));
 });
 
-app.get("/api/events/verify", (req, res) => {
-  res.json(verifyEventChain(req.query.envelopeId || null));
-});
-
 // Signing room (tokenized)
 app.get("/api/sign/:token", (req, res) => {
   const token = resolveToken(req.params.token);
@@ -1508,7 +1502,6 @@ app.post("/api/sign/:token/sign", async (req, res) => {
       envelopeId: token.envelope_id,
       partyId: token.party_id,
       method: signature.method,
-      font: signature.font,
       signatureDataUrl: signature.dataUrl,
       typedName,
       ip,

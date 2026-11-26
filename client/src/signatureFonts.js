@@ -17,7 +17,6 @@ const LATIN_EXT =
 
 /**
  * Bundled with the app so typed signatures render the same offline and on the phone demo.
- * Names must match SIGNATURE_FONTS in server/src/signatureInput.js.
  */
 export const SIGNATURE_FONTS = [
   { family: "Great Vibes", size: 1, files: [greatVibesLatin, greatVibesLatinExt] },

@@ -1,11 +1,10 @@
 import { createHash, randomBytes } from "node:crypto";
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import { db, newId, now, sha256 } from "./db.js";
-import { appendEvent, verifyEventChain } from "./events.js";
+import { appendEvent } from "./events.js";
 import { sendTemplatedEmail } from "./mail.js";
 import { readBytes, writeBytes, writeBase64Png } from "./storage.js";
 import { envelopePlacedFields, fieldsForParty } from "./documentFields.js";
-import { buildAuditCertificate } from "./auditCertificate.js";
 import { FINAL_EVIDENCE } from "./parties.js";
 import { assertClientMayBeInvited, assertContractMayBeIssued } from "./dueDiligence.js";
 import { SIGNATURE_MAX_HEIGHT } from "./signatureInput.js";
@@ -174,7 +173,6 @@ export async function applySignatureAndCompleteParty({
   envelopeId,
   partyId,
   method,
-  font = null,
   signatureDataUrl,
   typedName,
   ip,
@@ -225,15 +223,14 @@ export async function applySignatureAndCompleteParty({
   const sigId = newId();
   db.prepare(
     `INSERT INTO signatures (
-      id, party_id, envelope_id, method, signature_font, signature_asset_ref, document_hash,
+      id, party_id, envelope_id, method, signature_asset_ref, document_hash,
       consent_text, consent_given_at, signed_at, ip, user_agent
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     sigId,
     partyId,
     envelopeId,
     method,
-    font,
     sigFile.storageRef,
     envelope.baked_hash,
     CONSENT_TEXT,
@@ -305,8 +302,6 @@ export async function applySignatureAndCompleteParty({
     metadata: {
       signature_id: sigId,
       document_hash: envelope.baked_hash,
-      method,
-      ...(font ? { font } : {}),
     },
     ip,
     userAgent,
@@ -332,7 +327,7 @@ function pdfText(value) {
   return String(value || "").replace(/[^\x20-\x7E]/g, " ");
 }
 
-/** Signing attachments, in sign order, ready to bind ahead of the audit trail. */
+/** Signing attachments, in sign order, ready to bind after the signed contract. */
 export function listSigningAttachments(envelopeId) {
   const parties = db
     .prepare(
@@ -403,7 +398,7 @@ async function drawAttachmentNote(pdf, font, bold, entry, note) {
   });
 }
 
-/** Bind each requested attachment. The caller adds the audit trail after this. */
+/** Bind each requested attachment. */
 export async function appendBoundAttachments(pdf, entries) {
   const font = await pdf.embedFont(StandardFonts.Helvetica);
   const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
@@ -573,21 +568,8 @@ export async function finalizeEnvelope(envelopeId) {
     });
   }
 
-  const signedBytes = Buffer.from(await pdf.save());
-  const signedHash = sha256(signedBytes);
-  const signedPdf = await PDFDocument.load(signedBytes);
-  const attachments = listSigningAttachments(envelopeId);
-  await appendBoundAttachments(signedPdf, attachments);
-  const chain = verifyEventChain(envelopeId);
-  const certDoc = await buildAuditCertificate({
-    envelope: { ...envelope, completed_at: now() },
-    entity,
-    completedHash: signedHash,
-    chain,
-    attachmentCount: attachments.length,
-  });
-  const certPages = await signedPdf.copyPages(certDoc, certDoc.getPageIndices());
-  certPages.forEach((p) => signedPdf.addPage(p));
+  const signedPdf = await PDFDocument.load(Buffer.from(await pdf.save()));
+  await appendBoundAttachments(signedPdf, listSigningAttachments(envelopeId));
 
   const completedBytes = Buffer.from(await signedPdf.save());
   const completedFile = writeBytes(
@@ -608,21 +590,6 @@ export async function finalizeEnvelope(envelopeId) {
     now()
   );
 
-  const certBytes = Buffer.from(await certDoc.save());
-  const certFile = writeBytes("certificates", `${envelopeId}-certificate.pdf`, certBytes);
-  const certDocId = newId();
-  db.prepare(
-    `INSERT INTO documents (id, envelope_id, kind, storage_ref, sha256, size_bytes, created_at)
-     VALUES (?, ?, 'certificate', ?, ?, ?, ?)`
-  ).run(
-    certDocId,
-    envelopeId,
-    certFile.storageRef,
-    certFile.sha256,
-    certFile.sizeBytes,
-    now()
-  );
-
   const completedAt = now();
   db.prepare(
     "UPDATE envelopes SET status = 'completed', completed_at = ? WHERE id = ?"
@@ -634,7 +601,6 @@ export async function finalizeEnvelope(envelopeId) {
     eventType: "completed",
     metadata: {
       completed_document_id: completedDocId,
-      certificate_document_id: certDocId,
       baked_hash: envelope.baked_hash,
     },
   });

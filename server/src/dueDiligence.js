@@ -5,7 +5,6 @@ import { readBytes, writeBase64Png, writeBytes } from "./storage.js";
 import { DD_REQUIREMENTS, OFFICE_CHANGE_ITEM, PARTY_LABELS } from "./parties.js";
 import { packSources } from "./partyRecords.js";
 import { buildDueDiligencePdf, certificateSignature } from "./ddPack.js";
-import { wrapText } from "./packLayout.js";
 import { pdfText, ukDate } from "./coverStamp.js";
 import { SIGNATURE_MAX_HEIGHT } from "./signatureInput.js";
 
@@ -164,7 +163,6 @@ export function dueDiligenceState(envelopeId) {
     validatedAt: envelope.dd_validated_at || null,
     validatedBy: envelope.dd_validated_by || null,
     signedName: envelope.dd_signed_name || null,
-    signedIp: envelope.dd_signed_ip || null,
     hasFile: Boolean(envelope.dd_storage_ref),
     readyToCompile: pack.missing.length === 0,
     allSubmitted: recordGaps.length === 0,
@@ -474,23 +472,8 @@ export async function signDueDiligence(envelopeId, {
     });
     const ink = rgb(0.1, 0.12, 0.16);
     page.drawText(pdfText(ukDate(signedAt)), { x: box.dateX, y: box.dateY, size: 9, font: bold, color: ink });
-    const evidence = wrapText(
-      `Signed electronically by ${signerName} (${party.signer_email}) on ${ukDate(signedAt)} at ${signedAt.slice(11, 19)} UTC${ip ? ` from IP ${ip}` : ""}`,
-      font,
-      8,
-      box.evidenceW || 483
-    );
-    evidence.forEach((line, i) => {
-      page.drawText(line, {
-        x: box.evidenceX,
-        y: box.evidenceY - i * 11,
-        size: 8,
-        font,
-        color: rgb(0.38, 0.42, 0.48),
-      });
-    });
   } else {
-    await appendSignaturePage(pdf, { envelope, party, image, font, bold, signerName, signedAt, ip });
+    await appendSignaturePage(pdf, { envelope, party, image, font, bold, signerName, signedAt });
   }
 
   const out = Buffer.from(await pdf.save());
@@ -503,12 +486,11 @@ export async function signDueDiligence(envelopeId, {
     ip,
     sigFile,
     userAgent,
-    signature,
   });
 }
 
 /** Packs compiled before the director's certificate existed get a signature page before the back cover. */
-async function appendSignaturePage(pdf, { envelope, party, image, font, bold, signerName, signedAt, ip }) {
+async function appendSignaturePage(pdf, { envelope, party, image, font, bold, signerName, signedAt }) {
   const backPages = Math.min(Number(envelope.dd_back_pages) || 0, pdf.getPageCount());
   const page = pdf.insertPage(pdf.getPageCount() - backPages, [595, 842]);
   page.drawText("Broker signature", {
@@ -550,7 +532,7 @@ async function appendSignaturePage(pdf, { envelope, party, image, font, bold, si
     font,
     color: rgb(0.1, 0.12, 0.16),
   });
-  page.drawText(pdfText(`Date ${ukDate(signedAt)} · Signed ${signedAt}${ip ? ` · IP ${ip}` : ""}`), {
+  page.drawText(pdfText(`Date signed ${ukDate(signedAt)}`), {
     x: 48,
     y: 550,
     size: 11,
@@ -559,7 +541,7 @@ async function appendSignaturePage(pdf, { envelope, party, image, font, bold, si
   });
 }
 
-function finishDueDiligenceSignature({ envelopeId, partyId, out, signedAt, signerName, ip, sigFile, userAgent, signature }) {
+function finishDueDiligenceSignature({ envelopeId, partyId, out, signedAt, signerName, ip, sigFile, userAgent }) {
   const stored = writeBytes("diligence", `${envelopeId}-due-diligence.pdf`, out);
   db.prepare(
     `UPDATE envelopes
@@ -584,8 +566,6 @@ function finishDueDiligenceSignature({ envelopeId, partyId, out, signedAt, signe
     metadata: {
       file_hash: stored.sha256,
       signer_name: signerName,
-      method: signature.method,
-      ...(signature.font ? { font: signature.font } : {}),
     },
     ip,
     userAgent,

@@ -210,8 +210,6 @@ export const api = {
     request(`/api/envelopes/${envelopeId}/parties/${partyId}/link`, {
       method: "POST",
     }),
-  verifyEvents: (envelopeId) =>
-    request(`/api/events/verify${envelopeId ? `?envelopeId=${envelopeId}` : ""}`),
   signSession: (token) => request(`/api/sign/${token}`),
   saveField: (token, fieldId, value) =>
     request(`/api/sign/${token}/fields`, {

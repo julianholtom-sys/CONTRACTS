@@ -298,20 +298,12 @@ export function migrate() {
     `UPDATE email_templates
      SET body_html = ?, body_text = ?, updated_at = ?
      WHERE template_type = 'completion'
-       AND body_text LIKE '%appended audit sheet%'`
+       AND (body_text LIKE '%audit sheet%' OR body_text LIKE '%audit trail%' OR body_text LIKE '%IP address%')`
   ).run(
-    "<p>{{envelope_title}} is complete.</p><p>The completed PDF binds every requested attachment, then ends with the audit trail: who received the file and when they signed.</p>",
-    "{{envelope_title}} is complete. The completed PDF binds every requested attachment, then ends with the audit trail: who received the file and when they signed.",
+    "<p>{{envelope_title}} is complete.</p><p>The completed PDF binds every requested attachment.</p>",
+    "{{envelope_title}} is complete. The completed PDF binds every requested attachment.",
     new Date().toISOString()
   );
-  db.prepare(
-    `UPDATE email_templates
-     SET body_html = replace(body_html, ', when they signed, and their IP address.', ' and when they signed.'),
-         body_text = replace(body_text, ', when they signed, and their IP address.', ' and when they signed.'),
-         updated_at = ?
-     WHERE template_type = 'completion'
-       AND body_text LIKE '%their IP address%'`
-  ).run(new Date().toISOString());
 }
 
 function widenRoleKey(table, createSql) {
