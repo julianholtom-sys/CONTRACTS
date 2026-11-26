@@ -132,9 +132,10 @@ export function savePartyDetails(partyId, input = {}) {
   if (!party || (party.kind !== "contractor" && party.kind !== "supplier")) throw new Error("Company record not found");
   const paye = String(input.payeReference ?? party.paye_reference ?? "").replace(/\s+/g, "").toUpperCase();
   if (paye && !/^\d{3}\/[A-Z0-9]{1,10}$/.test(paye)) throw new Error("PAYE reference should look like 123/AB45678");
+  const saved = parseJson(party.insurance_json, {}) || {};
   const insurance = {};
   for (const [key, label] of INSURANCE_POLICIES[party.kind] || []) {
-    const entry = input.insurance?.[key] || {};
+    const entry = (input.insurance ? input.insurance[key] : saved[key]) || {};
     const coverText = String(entry.cover ?? "").replace(/[£,\s]/g, "");
     if (coverText && !/^\d+$/.test(coverText)) throw new Error(`${label} cover should be an amount in pounds`);
     const expiresOn = String(entry.expiresOn || "").trim();

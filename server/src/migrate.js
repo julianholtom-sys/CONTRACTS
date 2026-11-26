@@ -85,6 +85,7 @@ export function migrate() {
   ensureColumn("envelopes", "dd_cert_page", "INTEGER");
   ensureColumn("envelopes", "dd_cert_top", "REAL");
   ensureColumn("envelopes", "baked_dd_sha256", "TEXT");
+  ensureColumn("envelopes", "baked_clean_ref", "TEXT");
   ensureColumn("envelope_parties", "registered_office", "TEXT NOT NULL DEFAULT ''");
   ensureColumn("entities", "intro_email_text", "TEXT");
   ensureColumn("entities", "domain_verify_token", "TEXT");

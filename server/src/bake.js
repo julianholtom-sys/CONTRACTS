@@ -417,6 +417,8 @@ export async function bakeEnvelope(envelopeId, { actor = "system" } = {}) {
         `The master contract has no signature field for: ${names}. Replace the master contract with one that names each party, then bake again.`
       );
     }
+    // The signed copy is stamped onto this one, so it carries no field boxes or captions.
+    const cleanFile = writeBytes("baked", `${envelopeId}-clean.pdf`, Buffer.from(await bakedDoc.save()));
     for (const field of placedFields) {
       const page = bakedDoc.getPages()[
         Math.min(Number(field.page || 0), bakedDoc.getPageCount() - 1)
@@ -476,6 +478,7 @@ export async function bakeEnvelope(envelopeId, { actor = "system" } = {}) {
         appendix_ids_json = ?,
         contract_page_offset = ?,
         baked_dd_sha256 = ?,
+        baked_clean_ref = ?,
         bake_error = NULL
        WHERE id = ?`
     ).run(
@@ -490,6 +493,7 @@ export async function bakeEnvelope(envelopeId, { actor = "system" } = {}) {
       JSON.stringify(brand.appendices.map((a) => a.id)),
       contractPageOffset,
       signedPack ? envelope.dd_sha256 : null,
+      cleanFile.storageRef,
       envelopeId
     );
 

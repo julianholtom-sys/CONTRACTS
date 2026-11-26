@@ -88,7 +88,7 @@ npm run build
 npm start          # http://localhost:8787
 ```
 
-On **Windows**, `npm start` fails because `server` uses `NODE_ENV=production node …`. Use PowerShell: `$env:NODE_ENV='production'; node src/index.js` from `server/`, or `npm run dev`.
+`npm start` works on Windows and Linux alike: it runs `server/src/start.js`, which sets production mode itself (item 40).
 
 Dev split: `npm run dev` (API 8787, Vite 5173).
 
@@ -185,6 +185,11 @@ Rules of the road:
     - **Bug fixed:** contract field ids are copied from the template and schedule field ids, so they repeat across contracts, but `envelope_fields.id` was a global primary key. The second contract baked on the same template or schedule failed (“UNIQUE constraint failed: envelope_fields.id”). The key is now `(envelope_id, id)`; `migrate.js` rebuilds the table once and keeps the rows.
     - **UI:** Templates page (one section per broker plus the placeholder), **Contracts and schedules** on the broker page (`client/src/BrokerContracts.jsx`), wizard step **Which schedules?**, Library page without a contract picker, and “Schedules” instead of “Appendices” on the contract page.
     - Tested on a copy of the database with TEST PDFs: uploads detect the fields (3-way: contractor, broker, client; 4-way adds the supplier), bad shape and non-PDF uploads are refused, an E Street 3-way and 4-way contract each took the right contract and schedules, a 4-way-only schedule on a 3-way and an E Street schedule on a Union contract were refused, both baked to ready (cover, contract, schedules, back cover), a Union contract used the placeholder and baked alongside the earlier one, and broker contracts survived a restart.
+40. **3-way tested end to end; clean signed copy (2026-11-26).**
+    - **Test** (copy of the database, mail off, TEST contract and schedule for E Street, test contractor MISSIONOPSAI LTD and a test client): received and checked dates, PEP approval and worker rows filled, the pack compiled, Send refused until the broker signed the pack, the broker signed with Rizwan Bin Imtiaz’s saved signature, bake, the **Before sending** list named the contractor’s missing signature and director ID, then Send applied the contractor’s and broker’s saved signatures in order, wrote one email (the client’s invitation), the client uploaded its three documents and signed, and the contract completed: contract, schedule, back cover, the signed pack, then the bound director IDs and client documents. No address was recorded for anyone. The test contractor record has no PAYE reference or insurance details, so they were filled with test values on the copy only.
+    - **Signed copy is clean:** the teal field boxes and captions are only in the copy shown for signing. Bake also saves a copy without them (`envelopes.baked_clean_ref`), and the signed contract is stamped onto that one, so dates no longer print over the “Contractor date” captions. Contracts baked before this still use the boxed copy until baked again.
+    - **Company details save:** saving only the PAYE reference used to clear the three insurance policies on the record (the page always sends both, so the screen was not affected). Insurance is now kept unless it is sent.
+    - **`npm start` on Windows:** `server/src/start.js` sets production mode, replacing the Linux-only `NODE_ENV=production` prefix.
 
 ## Active git / PR notes
 
@@ -213,7 +218,8 @@ Rules of the road:
 - [x] Default New contract sending company to **Union Payroll**.
 - [x] Due diligence pack is compiled in the app. Parties are not emailed to complete it. The broker signs it from the contract.
 - [ ] Say “deploy to live” when phone demo should pick up new code (don’t assume every commit is live).
-- [ ] Make `npm start` work on Windows (`cross-env` or equivalent).
+- [x] Make `npm start` work on Windows (item 40).
+- [x] 3-way contract tested end to end, from creation to the client’s signature (item 40).
 - [x] Due diligence declarations and director’s certificate — signed by the broker’s director in the pack; the signed pack is added to the contract at issue.
 - [x] Union Payroll broker library record: no longer a sample, name spacing fixed.
 - [x] Client company number: Companies House details fill the client’s contract fields (no documents fetched).

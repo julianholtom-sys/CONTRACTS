@@ -620,7 +620,7 @@ export async function finalizeEnvelope(envelopeId) {
   const baked = db
     .prepare("SELECT * FROM documents WHERE id = ?")
     .get(envelope.baked_document_id);
-  const bakedBytes = readBytes(baked.storage_ref);
+  const bakedBytes = envelope.baked_clean_ref ? readBytes(envelope.baked_clean_ref) : readBytes(baked.storage_ref);
   const pdf = await PDFDocument.load(bakedBytes);
   const font = await pdf.embedFont(StandardFonts.Helvetica);
   const pages = pdf.getPages();
