@@ -244,7 +244,12 @@ export const api = {
     return request(`/api/brand-pack?${params}`);
   },
   bakeEnvelope: (id) => request(`/api/envelopes/${id}/bake`, { method: "POST" }),
-  sendEnvelope: (id) => request(`/api/envelopes/${id}/send`, { method: "POST" }),
+  sendEnvelope: (id, signingDates) =>
+    request(`/api/envelopes/${id}/send`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ signingDates }),
+    }),
   voidEnvelope: (id, reason) =>
     request(`/api/envelopes/${id}/void`, {
       method: "POST",

@@ -13,6 +13,7 @@ export default function EnvelopeDetail() {
   const [nameDraft, setNameDraft] = useState({});
   const [checks, setChecks] = useState({});
   const [pepDraft, setPepDraft] = useState({});
+  const [signingDates, setSigningDates] = useState({});
   const savedDates = useRef({});
 
   async function reload() {
@@ -65,6 +66,9 @@ export default function EnvelopeDetail() {
     .map((party) => ({ supplier: "contractor", spv: "supplier", agency: "broker" })[party.role_key])
     .join(", ")
     .replace(/, (?=[^,]*$)/, " and ");
+  const today = localToday();
+  const inAppSigners = envelope.parties.filter((party) => !party.signs_by_link && party.status !== "completed");
+  const dateSigned = (party) => signingDates[party.role_key] || today;
   const ddLocked = Boolean(diligence?.validatedAt) || !["draft", "ready"].includes(envelope.status);
   const undatedCount = (diligence?.missing || []).filter((item) => item.includes("received and checked dates")).length;
   const otherMissing = (diligence?.missing || []).filter((item) => !item.includes("received and checked dates"));
@@ -140,8 +144,8 @@ export default function EnvelopeDetail() {
           ) : null}
         </p>
         <p className="meta">
-          Prepared {envelope.prepared_on || "—"} · Issued{" "}
-          {envelope.issued_at ? String(envelope.issued_at).slice(0, 10) : "on send"}
+          Prepared {ukDay(envelope.prepared_on) || "—"} · Issued{" "}
+          {envelope.issued_at ? ukDay(envelope.issued_at) : "on send"}
         </p>
         {envelope.is_sample ? (
           <p className="muted">
@@ -172,7 +176,11 @@ export default function EnvelopeDetail() {
           className="btn secondary"
           type="button"
           disabled={busy || envelope.status !== "ready" || issueBlocked || signatureGaps.length > 0}
-          onClick={() => run("send", () => api.sendEnvelope(id))}
+          onClick={() =>
+            run("send", () =>
+              api.sendEnvelope(id, Object.fromEntries(inAppSigners.map((party) => [party.role_key, dateSigned(party)])))
+            )
+          }
         >
           {busy === "send" ? "Sending…" : "Send to the client"}
         </button>
@@ -197,28 +205,45 @@ export default function EnvelopeDetail() {
           Void
         </button>
       </div>
-      {["draft", "ready"].includes(envelope.status) ? (
-        signatureGaps.length ? (
-          <section className="panel" style={{ marginBottom: "1.25rem" }}>
-            <h2>Before sending</h2>
-            <ul className="audit-list">
-              {[...new Set(signatureGaps.map((gap) => gap.label))].map((label) => {
-                const items = signatureGaps.filter((gap) => gap.label === label);
-                return (
-                  <li key={label}>
-                    <strong>{label}</strong>
-                    <Link to={items[0].href}>{items.map((gap) => gap.text).join("; ")}</Link>
-                  </li>
-                );
-              })}
-            </ul>
-          </section>
-        ) : (
+      {["draft", "ready"].includes(envelope.status) && signatureGaps.length ? (
+        <section className="panel" style={{ marginBottom: "1.25rem" }}>
+          <h2>Before sending</h2>
+          <ul className="audit-list">
+            {[...new Set(signatureGaps.map((gap) => gap.label))].map((label) => {
+              const items = signatureGaps.filter((gap) => gap.label === label);
+              return (
+                <li key={label}>
+                  <strong>{label}</strong>
+                  <Link to={items[0].href}>{items.map((gap) => gap.text).join("; ")}</Link>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      ) : null}
+      {["draft", "ready"].includes(envelope.status) && inAppSigners.length ? (
+        <section className="panel" style={{ marginBottom: "1.25rem" }}>
+          <h2>Dates signed</h2>
           <p className="muted">
-            Sending applies the saved signatures for the {savedSigners}, dated today, then emails the client its
-            signing link.
+            Sending applies the saved signatures for the {savedSigners} with these dates, in sign order, then emails
+            the client its signing link.
           </p>
-        )
+          <div className="signer-row">
+            {inAppSigners.map((party) => (
+              <label key={party.id}>
+                {SIGNER_LABEL[party.role_key] || party.role_label} · {party.signer_name}
+                <input
+                  type="date"
+                  value={dateSigned(party)}
+                  min={envelope.prepared_on || undefined}
+                  max={today}
+                  disabled={Boolean(busy)}
+                  onChange={(e) => setSigningDates((prev) => ({ ...prev, [party.role_key]: e.target.value }))}
+                />
+              </label>
+            ))}
+          </div>
+        </section>
       ) : null}
 
       {diligence?.applies ? (
@@ -804,7 +829,7 @@ export default function EnvelopeDetail() {
                     {party.evidence_required ? ", uploading its incorporation certificate, VAT certificate and director ID" : ""}
                   </p>
                 ) : party.status === "completed" ? (
-                  <p className="muted">Signed with the saved signature on {String(party.completed_at || "").slice(0, 10)}</p>
+                  <p className="muted">Signed with the saved signature, dated {ukDay(party.signed_on || party.completed_at)}</p>
                 ) : (
                   <p className="muted">
                     Signs with the saved signature when the contract is sent
@@ -859,4 +884,11 @@ function sameDates(a, b) {
 
 function ukDay(iso) {
   return iso ? String(iso).slice(0, 10).split("-").reverse().join("/") : "";
+}
+
+const SIGNER_LABEL = { supplier: "Contractor", spv: "Supplier", agency: "Broker" };
+
+function localToday() {
+  const day = new Date();
+  return `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, "0")}-${String(day.getDate()).padStart(2, "0")}`;
 }

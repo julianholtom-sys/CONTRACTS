@@ -22,6 +22,7 @@ import {
   inviteParty,
   issuePartyToken,
   resolveToken,
+  signingDatesFor,
   startSigningInvites,
 } from "./signing.js";
 import { ensureSeed, ensureSigningEvidence } from "./seed.js";
@@ -1336,8 +1337,9 @@ app.post("/api/envelopes/:id/send", async (req, res) => {
     assertContractMayBeIssued(req.params.id);
     const gaps = savedSignatureGaps(req.params.id);
     if (gaps.length) throw new Error(gapMessage(gaps));
+    const signingDates = signingDatesFor(req.params.id, req.body?.signingDates);
     await bakeInSignedPack(req.params.id, { actor: "staff" });
-    const result = startSigningInvites(req.params.id, baseUrl, "staff");
+    const result = startSigningInvites(req.params.id, baseUrl, "staff", { signingDates });
     res.json({ ...getEnvelopeBundle(req.params.id), invite: result });
   } catch (err) {
     res.status(400).json({ error: err.message || "Send failed" });

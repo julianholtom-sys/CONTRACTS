@@ -5,7 +5,7 @@ import { appendEvent } from "./events.js";
 import { sendTemplatedEmail } from "./mail.js";
 import { readBytes, writeBytes, writeBase64Png } from "./storage.js";
 import { envelopePlacedFields, fieldsForParty } from "./documentFields.js";
-import { FINAL_EVIDENCE, SIGNS_BY_LINK } from "./parties.js";
+import { FINAL_EVIDENCE, PARTY_LABELS, SIGNS_BY_LINK } from "./parties.js";
 import { assertClientMayBeInvited, assertContractMayBeIssued } from "./dueDiligence.js";
 import { localDay } from "./ddChecks.js";
 import { ukDate } from "./coverStamp.js";
@@ -160,7 +160,35 @@ export function inviteParty(envelopeId, partyId, { baseUrl, actor = "system" } =
   return { signingLink, tokenId: token.id };
 }
 
-export function startSigningInvites(envelopeId, baseUrl, actor = "staff") {
+const isCalendarDay = (day) =>
+  /^\d{4}-\d{2}-\d{2}$/.test(day) && new Date(`${day}T00:00:00Z`).toISOString().slice(0, 10) === day;
+
+/**
+ * The date each party signing in the app signed, entered when the contract is issued (today if left out).
+ * Dates follow the sign order, are not before the contract was prepared and not after today.
+ */
+export function signingDatesFor(envelopeId, input = {}) {
+  const envelope = db.prepare("SELECT prepared_on FROM envelopes WHERE id = ?").get(envelopeId);
+  const today = localDay();
+  const dates = {};
+  let previous = null;
+  for (const party of partiesSigningInApp(envelopeId)) {
+    if (party.status === "completed") continue;
+    const label = PARTY_LABELS[party.role_key] || party.role_label;
+    const day = String(input?.[party.role_key] || today).trim();
+    if (!isCalendarDay(day)) throw new Error(`${label}: enter the date signed`);
+    if (day > today) throw new Error(`${label}: the date signed is after today`);
+    if (envelope?.prepared_on && day < envelope.prepared_on) {
+      throw new Error(`${label}: the date signed is before the contract was prepared (${ukDate(envelope.prepared_on)})`);
+    }
+    if (previous && day < previous.day) throw new Error(`${label}: the date signed is before the ${previous.label}’s`);
+    dates[party.role_key] = day;
+    previous = { day, label };
+  }
+  return dates;
+}
+
+export function startSigningInvites(envelopeId, baseUrl, actor = "staff", { signingDates } = {}) {
   assertContractMayBeIssued(envelopeId);
   const envelope = db.prepare("SELECT * FROM envelopes WHERE id = ?").get(envelopeId);
   if (!envelope || envelope.status !== "ready") {
@@ -169,12 +197,13 @@ export function startSigningInvites(envelopeId, baseUrl, actor = "staff") {
   if (!envelope.baked_hash) throw new Error("Envelope is not baked");
   const gaps = savedSignatureGaps(envelopeId);
   if (gaps.length) throw new Error(gapMessage(gaps));
+  const dates = signingDatesFor(envelopeId, signingDates);
 
   const issuedAt = now();
   db.prepare(
     "UPDATE envelopes SET issued_at = COALESCE(issued_at, ?) WHERE id = ?"
   ).run(issuedAt, envelopeId);
-  applySavedSignatures(envelopeId, { actor });
+  applySavedSignatures(envelopeId, { actor, signingDates: dates });
 
   const client = getActionableParty(envelopeId);
   if (!client) throw new Error("No actionable party");
@@ -233,17 +262,17 @@ function attachDirectorId(envelopeId, party, file) {
 
 /**
  * The contractor, the supplier (4-way) and the broker sign in that order with the
- * signature saved on their record, dated the day the contract is issued. Only the
- * client signs by link, last.
+ * signature saved on their record, each dated as entered when the contract is issued.
+ * Only the client signs by link, last.
  */
-export function applySavedSignatures(envelopeId, { actor = "staff" } = {}) {
+export function applySavedSignatures(envelopeId, { actor = "staff", signingDates } = {}) {
   const gaps = savedSignatureGaps(envelopeId);
   if (gaps.length) throw new Error(gapMessage(gaps));
   const envelope = db.prepare("SELECT * FROM envelopes WHERE id = ?").get(envelopeId);
-  const signedOn = localDay();
+  const dates = signingDatesFor(envelopeId, signingDates);
   db.exec("BEGIN");
   try {
-    signWithSavedSignatures(envelope, signedOn, actor);
+    signWithSavedSignatures(envelope, dates, actor);
     db.exec("COMMIT");
   } catch (err) {
     db.exec("ROLLBACK");
@@ -251,11 +280,12 @@ export function applySavedSignatures(envelopeId, { actor = "staff" } = {}) {
   }
 }
 
-function signWithSavedSignatures(envelope, signedOn, actor) {
+function signWithSavedSignatures(envelope, dates, actor) {
   const envelopeId = envelope.id;
   let previous = 0;
   for (const party of partiesSigningInApp(envelopeId)) {
     if (party.status === "completed") continue;
+    const signedOn = dates[party.role_key];
     previous = Math.max(Date.now(), previous + 1);
     const signedAt = new Date(previous).toISOString();
     const record = recordForEnvelopeParty(envelope, party);
@@ -287,14 +317,14 @@ function signWithSavedSignatures(envelope, signedOn, actor) {
       signedAt
     );
     db.prepare(
-      "UPDATE envelope_parties SET status = 'completed', completed_at = ? WHERE id = ?"
-    ).run(signedAt, party.id);
+      "UPDATE envelope_parties SET status = 'completed', completed_at = ?, signed_on = ? WHERE id = ?"
+    ).run(signedAt, signedOn, party.id);
     appendEvent({
       envelopeId,
       partyId: party.id,
       actor,
       eventType: "signed",
-      metadata: { signature_id: sigId, document_hash: envelope.baked_hash, saved_signature: true },
+      metadata: { signature_id: sigId, document_hash: envelope.baked_hash, saved_signature: true, signed_on: signedOn },
     });
   }
   db.prepare("UPDATE envelopes SET status = 'in_progress' WHERE id = ? AND status = 'ready'").run(envelopeId);
