@@ -7,6 +7,19 @@ import { packSources } from "./partyRecords.js";
 import { buildDueDiligencePdf, certificateSignature } from "./ddPack.js";
 import { pdfText, ukDate } from "./coverStamp.js";
 import { SIGNATURE_MAX_HEIGHT } from "./signatureInput.js";
+import {
+  HOLIDAY_METHODS,
+  REVIEW_FREQUENCIES,
+  WORKER_TOPICS,
+  WORKER_TYPES,
+  chainNames,
+  localDay,
+  pepRows,
+  reviewFrequency,
+  signBlockers,
+  workerArrangements,
+  workerSettings,
+} from "./ddChecks.js";
 
 const ACCEPTED = ["application/pdf", "image/jpeg", "image/png"];
 
@@ -156,9 +169,19 @@ export function dueDiligenceState(envelopeId) {
   }
   const pack = packSources(envelopeId);
   const recordGaps = pack.missing.filter((item) => !item.includes("received and checked dates"));
+  const entity = db.prepare("SELECT display_name FROM entities WHERE id = ?").get(envelope.entity_id);
+  const settings = workerSettings(envelope);
+  const pep = pepRows(envelopeId, pack.records);
+  const worker = workerArrangements(envelope, chainNames(envelope, pack, entity));
   return {
     applies: true,
     shape: envelope.party_shape,
+    reviewFrequency: reviewFrequency(envelope),
+    workerType: settings.workerType,
+    holidayMethod: settings.holidayMethod,
+    pep,
+    worker,
+    blockers: signBlockers(pep, worker),
     compiledAt: envelope.dd_compiled_at || null,
     validatedAt: envelope.dd_validated_at || null,
     validatedBy: envelope.dd_validated_by || null,
@@ -336,6 +359,74 @@ export function setOfficeChanged(envelopeId, enabled) {
   return dueDiligenceState(envelopeId);
 }
 
+function saveWorker(envelopeId, worker) {
+  db.prepare("UPDATE envelopes SET dd_worker_json = ? WHERE id = ?").run(JSON.stringify(worker), envelopeId);
+}
+
+/** Review frequency and the two holiday pay choices. A changed holiday choice needs confirming again. */
+export function saveDiligenceSettings(envelopeId, input = {}) {
+  const envelope = db.prepare("SELECT * FROM envelopes WHERE id = ?").get(envelopeId);
+  assertDdEditable(envelope);
+  if (input.reviewFrequency !== undefined) {
+    if (!REVIEW_FREQUENCIES[input.reviewFrequency]) throw new Error("Choose monthly or quarterly reviews");
+    db.prepare("UPDATE envelopes SET dd_review_frequency = ? WHERE id = ?").run(input.reviewFrequency, envelopeId);
+  }
+  if (input.workerType !== undefined || input.holidayMethod !== undefined) {
+    const current = workerSettings(envelope);
+    const workerType = input.workerType ?? current.workerType;
+    let holidayMethod = input.holidayMethod ?? current.holidayMethod;
+    if (!WORKER_TYPES[workerType]) throw new Error("Choose regular hours, irregular hours or part-year");
+    if (!HOLIDAY_METHODS[holidayMethod]) throw new Error("Choose paid when taken or rolled up at 12.07%");
+    if (workerType === "regular" && holidayMethod === "rolled_up") {
+      if (input.holidayMethod === "rolled_up") {
+        throw new Error("Rolled-up holiday pay is only allowed for irregular-hours or part-year workers");
+      }
+      holidayMethod = "taken";
+    }
+    const confirmed = { ...current.confirmed };
+    if (workerType !== current.workerType || holidayMethod !== current.holidayMethod) delete confirmed.holiday;
+    saveWorker(envelopeId, { workerType, holidayMethod, confirmed });
+  }
+  clearCompiled(envelopeId);
+  return dueDiligenceState(envelopeId);
+}
+
+/** Staff record a PEP and adverse media result for one director or PSC and approve it, or withdraw the approval. */
+export function savePepCheck(envelopeId, { roleKey, personKey, result = "clear", approved = true } = {}, reviewer = "") {
+  const envelope = db.prepare("SELECT * FROM envelopes WHERE id = ?").get(envelopeId);
+  assertDdEditable(envelope);
+  if (!["clear", "flag"].includes(result)) throw new Error("Choose Clear or Flag");
+  const row = dueDiligenceState(envelopeId).pep.find((item) => item.roleKey === roleKey && item.personKey === personKey);
+  if (!row) throw new Error("That person is not a current director or PSC on this pack");
+  db.prepare(
+    `INSERT INTO envelope_pep_checks (envelope_id, role_key, person_key, result, approved_by, approved_on)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT (envelope_id, role_key, person_key) DO UPDATE SET
+       result = excluded.result, approved_by = excluded.approved_by, approved_on = excluded.approved_on`
+  ).run(envelopeId, roleKey, personKey, result, approved ? reviewer || "Staff" : null, approved ? localDay() : null);
+  clearCompiled(envelopeId);
+  appendEvent({
+    envelopeId,
+    actor: "staff",
+    eventType: "dd_pep_checked",
+    metadata: { role_key: roleKey, person: row.name, result, approved: Boolean(approved) },
+  });
+  return dueDiligenceState(envelopeId);
+}
+
+export function confirmWorkerArrangement(envelopeId, { topic, confirmed = true } = {}, reviewer = "") {
+  const envelope = db.prepare("SELECT * FROM envelopes WHERE id = ?").get(envelopeId);
+  assertDdEditable(envelope);
+  if (!WORKER_TOPICS.some(([key]) => key === topic)) throw new Error("Unknown worker arrangement");
+  const current = workerSettings(envelope);
+  const next = { ...current.confirmed };
+  if (confirmed) next[topic] = { by: reviewer || "Staff", on: localDay() };
+  else delete next[topic];
+  saveWorker(envelopeId, { workerType: current.workerType, holidayMethod: current.holidayMethod, confirmed: next });
+  clearCompiled(envelopeId);
+  return dueDiligenceState(envelopeId);
+}
+
 function packEntries(envelopeId) {
   const envelope = db.prepare("SELECT * FROM envelopes WHERE id = ?").get(envelopeId);
   const state = dueDiligenceState(envelopeId);
@@ -440,6 +531,8 @@ export async function signDueDiligence(envelopeId, {
   if (envelope.dd_validated_at) {
     throw new Error("The broker has already signed this due diligence pack");
   }
+  const { blockers } = dueDiligenceState(envelopeId);
+  if (blockers.length) throw new Error(`Before the pack can be signed: ${blockers.join("; ")}`);
   const party = db.prepare("SELECT * FROM envelope_parties WHERE id = ?").get(partyId);
   const role = db.prepare("SELECT * FROM template_roles WHERE id = ?").get(party?.role_id);
   if (!party || party.envelope_id !== envelopeId || role?.role_key !== "agency") {
@@ -596,6 +689,7 @@ export function diligenceSession(partyId) {
       company_name: party.company_name,
     },
     compiled: Boolean(state.compiledAt),
+    blockers: state.blockers,
     signed: Boolean(state.validatedAt),
     signedAt: state.validatedAt,
     signedName: state.signedName,

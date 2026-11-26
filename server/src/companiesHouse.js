@@ -124,6 +124,9 @@ function parsePeople(html, prefix) {
       ceasedOn: field(block, `psc-ceased-on-${n}`),
       registrationNumber: field(block, `psc-registration-number-${n}`),
       address: field(block, `${prefix}-address-value-${n}`),
+      // Someone still to verify shows only a statement due date, so only this wording counts as verified.
+      identityVerified: /Verification requirements complete/i.test(block),
+      verificationDueOn: field(block, `${prefix}-identity-verification-details-appointment-verification-statement-due-on-${n}`),
     });
   });
   return people;

@@ -84,10 +84,20 @@ export default function DiligenceRoom() {
                   />
                   <span>I have checked this pack and sign the director’s certificate</span>
                 </label>
+                {session.blockers?.length ? (
+                  <ul className="audit-list">
+                    {session.blockers.map((item) => (
+                      <li key={item}>
+                        <strong>Before signing</strong>
+                        <span>{item}</span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
                 <button
                   type="button"
                   className="btn"
-                  disabled={busy || !session.compiled || !consent || !signature || locked}
+                  disabled={busy || !session.compiled || !consent || !signature || locked || Boolean(session.blockers?.length)}
                   onClick={() =>
                     run("sign", () =>
                       api.signDiligence(token, {

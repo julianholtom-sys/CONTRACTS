@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { db, newId, now } from "./db.js";
-import { PARTY_LABELS, PARTY_UPLOADS } from "./parties.js";
+import { INSURANCE_POLICIES, PARTY_LABELS, PARTY_UPLOADS } from "./parties.js";
 import { downloadFiling, fetchCompanyRecord, filingLabel, normaliseCompanyNumber } from "./companiesHouse.js";
 import { screenNames } from "./sanctions.js";
 import { absolutePath, writeBytes } from "./storage.js";
@@ -67,6 +67,8 @@ export function serializeRecord(row) {
     signer_role_label: roleLabel(row.signer_role),
     signer_email: row.signer_email,
     is_sample: Boolean(row.is_sample),
+    paye_reference: row.paye_reference || "",
+    insurance: insuranceFor(row),
     registry: registry
       ? {
           legal_name: registry.legal_name || "",
@@ -103,6 +105,50 @@ export function serializeRecord(row) {
     uploads: uploadViews,
     uploadsComplete: uploadViews.every((item) => item.file),
   };
+}
+
+/** Each policy asked for on this kind of company, with whatever has been entered for it. */
+export function insuranceFor(row) {
+  const saved = parseJson(row?.insurance_json, {}) || {};
+  return (INSURANCE_POLICIES[row?.kind] || []).map(([key, label, certificate]) => ({
+    key,
+    label,
+    certificate,
+    insurer: saved[key]?.insurer || "",
+    policyNumber: saved[key]?.policyNumber || "",
+    cover: Number.isFinite(saved[key]?.cover) ? saved[key].cover : null,
+    expiresOn: saved[key]?.expiresOn || "",
+  }));
+}
+
+const policyComplete = (policy) => Boolean(policy.insurer && policy.policyNumber && policy.cover != null && policy.expiresOn);
+
+/** The PAYE reference and the insurance details, saved apart from the company and signatory. */
+export function savePartyDetails(partyId, input = {}) {
+  const party = partyRow(partyId);
+  if (!party || (party.kind !== "contractor" && party.kind !== "supplier")) throw new Error("Company record not found");
+  const paye = String(input.payeReference ?? party.paye_reference ?? "").replace(/\s+/g, "").toUpperCase();
+  if (paye && !/^\d{3}\/[A-Z0-9]{1,10}$/.test(paye)) throw new Error("PAYE reference should look like 123/AB45678");
+  const insurance = {};
+  for (const [key, label] of INSURANCE_POLICIES[party.kind] || []) {
+    const entry = input.insurance?.[key] || {};
+    const coverText = String(entry.cover ?? "").replace(/[£,\s]/g, "");
+    if (coverText && !/^\d+$/.test(coverText)) throw new Error(`${label} cover should be an amount in pounds`);
+    const expiresOn = String(entry.expiresOn || "").trim();
+    if (expiresOn && !/^\d{4}-\d{2}-\d{2}$/.test(expiresOn)) throw new Error(`${label} expiry must be a calendar date`);
+    insurance[key] = {
+      insurer: String(entry.insurer || "").trim().slice(0, 120),
+      policyNumber: String(entry.policyNumber || "").trim().slice(0, 60),
+      cover: coverText ? Number(coverText) : null,
+      expiresOn,
+    };
+  }
+  db.prepare("UPDATE directory_parties SET paye_reference = ?, insurance_json = ? WHERE id = ?").run(
+    paye,
+    JSON.stringify(insurance),
+    partyId
+  );
+  return getPartyRecord(partyId);
 }
 
 function safeCount(json) {
@@ -374,6 +420,7 @@ export function packSources(envelopeId) {
       records.push({ roleKey, label, companyName: party.company_name, directoryId: null, href });
       continue;
     }
+    const insurance = insuranceFor(record);
     records.push({
       roleKey,
       label,
@@ -381,6 +428,8 @@ export function packSources(envelopeId) {
       normalName: record.normal_name || "",
       directoryId: record.id,
       companyNumber: record.company_number || "",
+      payeReference: record.paye_reference || "",
+      insurance,
       href,
     });
     const registry = registryRow(record.id);
@@ -388,6 +437,17 @@ export function packSources(envelopeId) {
       missing.push(`${label}: add the company number`);
     } else if (!registry?.fetched_at) {
       missing.push(`${label}: fetch Companies House`);
+    } else if (
+      [...parseJson(registry.officers_json, []), ...parseJson(registry.psc_json, [])].some(
+        (person) => !("identityVerified" in person)
+      )
+    ) {
+      missing.push(`${label}: fetch Companies House again for identity verification`);
+    }
+    const employerRole = envelope?.party_shape === "four" ? "spv" : "supplier";
+    if (roleKey === employerRole && !record.paye_reference) missing.push(`${label}: PAYE reference`);
+    for (const policy of insurance.filter((item) => !policyComplete(item))) {
+      missing.push(`${label}: ${policy.label} insurer, policy number, cover and expiry`);
     }
     const files = filesFor(record.id);
     for (const file of files.filter((item) => item.source === "companies_house")) {

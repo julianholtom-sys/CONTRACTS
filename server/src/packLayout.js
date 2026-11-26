@@ -225,7 +225,7 @@ export class PackWriter {
   /**
    * Bordered table. Columns are { label, width, align? } with widths summing to the content width.
    * A cell is a string, { text, bold, color }, { runs: [{ text, bold, color }] } for mixed styling
-   * on one line, or { result: "clear" | "flag" | "na" } for a check result.
+   * on one line, or { result: "clear" | "flag" | "na", label? } for a check result.
    */
   tableLayout(columns, { labelColumn = false, size = 8.5 } = {}) {
     const pad = 5;
@@ -278,7 +278,7 @@ export class PackWriter {
           borderWidth: 0.6,
         });
         if (cell && typeof cell === "object" && "result" in cell) {
-          this.resultMark(xs[index] + columns[index].width / 2, top - pad - size + 1, cell.result, size);
+          this.resultMark(xs[index] + columns[index].width / 2, top - pad - size + 1, cell.result, size, cell.label);
           return;
         }
         const color = (typeof cell === "object" && cell?.color) || this.theme.ink;
@@ -318,9 +318,12 @@ export class PackWriter {
     this.y -= 12;
   }
 
-  /** "Clear" with a green tick, "Flag" with a red cross, or a grey "N/A", centred on cx at the text baseline. */
-  resultMark(cx, baseline, result, size) {
-    const word = result === "clear" ? "Clear" : result === "flag" ? "Flag" : "N/A";
+  /**
+   * "Clear" with a green tick, "Flag" with a red cross, or a grey "N/A", centred on cx at the text baseline.
+   * `label` replaces the word (e.g. "Verified" with the tick), keeping the mark and colour.
+   */
+  resultMark(cx, baseline, result, size, label) {
+    const word = label || (result === "clear" ? "Clear" : result === "flag" ? "Flag" : "N/A");
     const color = result === "clear" ? this.theme.ok : result === "flag" ? this.theme.alert : this.theme.muted;
     const markW = result === "na" ? 0 : size * 0.95;
     const gap = markW ? size * 0.45 : 0;

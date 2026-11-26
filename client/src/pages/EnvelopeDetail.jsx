@@ -12,6 +12,7 @@ export default function EnvelopeDetail() {
   const [nameDraft, setNameDraft] = useState({});
   const [checks, setChecks] = useState({});
   const [companyDates, setCompanyDates] = useState({});
+  const [pepDraft, setPepDraft] = useState({});
 
   async function reload() {
     const data = await api.getEnvelope(id);
@@ -54,6 +55,7 @@ export default function EnvelopeDetail() {
 
   const diligence = envelope.due_diligence;
   const issueBlocked = Boolean(diligence?.applies && !diligence.validatedAt);
+  const ddLocked = Boolean(diligence?.validatedAt) || !["draft", "ready"].includes(envelope.status);
   const undatedCount = (diligence?.missing || []).filter((item) => item.includes("received and checked dates")).length;
   const otherMissing = (diligence?.missing || []).filter((item) => !item.includes("received and checked dates"));
   const datedCompanies = (diligence?.records || []).filter((record) =>
@@ -445,6 +447,179 @@ export default function EnvelopeDetail() {
               </div>
             );
           })}
+          <div className="party-card" style={{ marginTop: "1rem" }}>
+            <h3>Review</h3>
+            <label>
+              Review frequency
+              <select
+                value={diligence.reviewFrequency}
+                disabled={Boolean(busy) || ddLocked}
+                onChange={(e) => run("settings", () => api.saveDiligenceSettings(id, { reviewFrequency: e.target.value }))}
+              >
+                <option value="monthly">Monthly</option>
+                <option value="quarterly">Quarterly</option>
+              </select>
+            </label>
+          </div>
+          <div className="party-card" style={{ marginTop: "1rem" }}>
+            <h3>PEP and adverse media screening</h3>
+            {(diligence.records || []).map((record) => {
+              const people = (diligence.pep || []).filter((row) => row.roleKey === record.roleKey);
+              if (!people.length) return null;
+              return (
+                <div key={record.roleKey} style={{ marginTop: "0.5rem" }}>
+                  <strong>
+                    {record.label} · {record.companyName}
+                  </strong>
+                  {people.map((person) => {
+                    const draftKey = `${person.roleKey}:${person.personKey}`;
+                    const draftResult = pepDraft[draftKey] || person.result || "clear";
+                    return (
+                      <div key={draftKey} className="toolbar" style={{ marginTop: "0.4rem", alignItems: "center" }}>
+                        <span>
+                          {person.name} <span className="muted">({person.roles.join(" and ")})</span>
+                        </span>
+                        {person.verified == null ? (
+                          <span className="badge draft">ID not checked</span>
+                        ) : person.verified ? (
+                          <span className="badge completed">ID verified</span>
+                        ) : (
+                          <span className="badge sent">
+                            ID not verified
+                            {person.verificationDueOn ? `, due ${ukDay(person.verificationDueOn)}` : ""}
+                          </span>
+                        )}
+                        {person.approvedOn ? (
+                          <>
+                            <span className={`badge ${person.result === "flag" ? "sent" : "completed"}`}>
+                              {person.result === "flag" ? "Flag" : "Clear"}
+                            </span>
+                            <span className="meta">
+                              Approved by {person.approvedBy} on {ukDay(person.approvedOn)}
+                            </span>
+                            <button
+                              type="button"
+                              className="btn secondary"
+                              disabled={Boolean(busy) || ddLocked}
+                              onClick={() =>
+                                run(`pep-${draftKey}`, () =>
+                                  api.savePepCheck(id, {
+                                    roleKey: person.roleKey,
+                                    personKey: person.personKey,
+                                    result: person.result,
+                                    approved: false,
+                                  })
+                                )
+                              }
+                            >
+                              Undo
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <select
+                              value={draftResult}
+                              disabled={Boolean(busy) || ddLocked}
+                              onChange={(e) => setPepDraft((prev) => ({ ...prev, [draftKey]: e.target.value }))}
+                            >
+                              <option value="clear">Clear</option>
+                              <option value="flag">Flag</option>
+                            </select>
+                            <button
+                              type="button"
+                              className="btn"
+                              disabled={Boolean(busy) || ddLocked}
+                              onClick={() =>
+                                run(`pep-${draftKey}`, () =>
+                                  api.savePepCheck(id, {
+                                    roleKey: person.roleKey,
+                                    personKey: person.personKey,
+                                    result: draftResult,
+                                  })
+                                )
+                              }
+                            >
+                              Approve
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })}
+            {!(diligence.pep || []).length ? (
+              <p className="meta">No directors or PSCs found. Fetch Companies House on each company record.</p>
+            ) : null}
+          </div>
+          <div className="party-card" style={{ marginTop: "1rem" }}>
+            <h3>Worker arrangements</h3>
+            <div className="signer-row">
+              <label>
+                Worker type
+                <select
+                  value={diligence.workerType}
+                  disabled={Boolean(busy) || ddLocked}
+                  onChange={(e) => run("settings", () => api.saveDiligenceSettings(id, { workerType: e.target.value }))}
+                >
+                  <option value="regular">Regular hours</option>
+                  <option value="irregular">Irregular hours</option>
+                  <option value="part_year">Part-year</option>
+                </select>
+              </label>
+              <label>
+                Holiday pay
+                <select
+                  value={diligence.holidayMethod}
+                  disabled={Boolean(busy) || ddLocked}
+                  onChange={(e) => run("settings", () => api.saveDiligenceSettings(id, { holidayMethod: e.target.value }))}
+                >
+                  <option value="taken">Paid when taken</option>
+                  <option value="rolled_up" disabled={diligence.workerType === "regular"}>
+                    Rolled up at 12.07%
+                  </option>
+                </select>
+              </label>
+            </div>
+            {diligence.workerType === "regular" ? (
+              <p className="meta">Rolled-up holiday pay is only for irregular-hours or part-year workers.</p>
+            ) : null}
+            {(diligence.worker || []).map((row) => (
+              <div key={row.key} style={{ marginTop: "0.75rem" }}>
+                <strong>{row.label}</strong>
+                <p className="muted" style={{ margin: "0.2rem 0" }}>
+                  {row.text}
+                </p>
+                <label className="consent">
+                  <input
+                    type="checkbox"
+                    checked={row.confirmed}
+                    disabled={Boolean(busy) || ddLocked}
+                    onChange={(e) =>
+                      run(`worker-${row.key}`, () =>
+                        api.confirmWorkerArrangement(id, { topic: row.key, confirmed: e.target.checked })
+                      )
+                    }
+                  />
+                  <span>
+                    Confirmed
+                    {row.confirmed && row.confirmedBy ? ` · ${row.confirmedBy}, ${ukDay(row.confirmedOn)}` : ""}
+                  </span>
+                </label>
+              </div>
+            ))}
+          </div>
+          {diligence.blockers?.length && !diligence.validatedAt ? (
+            <ul className="audit-list" style={{ marginTop: "1rem" }}>
+              {diligence.blockers.map((item) => (
+                <li key={item}>
+                  <strong>Before signing</strong>
+                  <span>{item}</span>
+                </li>
+              ))}
+            </ul>
+          ) : null}
           <div className="toolbar" style={{ marginTop: "1rem" }}>
             <button
               type="button"
@@ -458,7 +633,7 @@ export default function EnvelopeDetail() {
               <button
                 type="button"
                 className="btn secondary"
-                disabled={Boolean(busy)}
+                disabled={Boolean(busy) || Boolean(diligence.blockers?.length)}
                 onClick={() =>
                   run("sign", async () => {
                     const result = await api.dueDiligenceSignLink(id);
@@ -576,4 +751,8 @@ export default function EnvelopeDetail() {
       </div>
     </div>
   );
+}
+
+function ukDay(iso) {
+  return iso ? String(iso).slice(0, 10).split("-").reverse().join("/") : "";
 }

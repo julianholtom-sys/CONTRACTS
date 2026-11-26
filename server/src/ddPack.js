@@ -5,6 +5,17 @@ import { embedLogoImage, resolveBrandPack } from "./bake.js";
 import { coverDetails, ukDate } from "./coverStamp.js";
 import { packSources, registryBundle } from "./partyRecords.js";
 import {
+  REVIEW_FREQUENCIES,
+  chainNames,
+  insuranceChecks,
+  localDay,
+  nextReview,
+  pepRows,
+  reviewFrequency,
+  rolesText,
+  workerArrangements,
+} from "./ddChecks.js";
+import {
   BODY_BOTTOM,
   BODY_TOP,
   CONTENT_W,
@@ -37,7 +48,10 @@ export async function buildDueDiligencePdf(envelopeId) {
   const contractName = `${details.version === "4-way" ? "Four-party" : "Three-party"} ${templateName}`;
   const brokerName = entity?.display_name || "the broker";
   const brokerLegal = brokerLegalName(entity) || brokerName;
-  const prepared = ukDate(localDay());
+  const packDay = localDay();
+  const prepared = ukDate(packDay);
+  const names = chainNames(envelope, sources, entity);
+  const pep = pepRows(envelopeId, sources.records);
 
   const out = await PDFDocument.create();
   const font = await out.embedFont(StandardFonts.Helvetica);
@@ -79,18 +93,20 @@ export async function buildDueDiligencePdf(envelopeId) {
   const annexNo = Object.fromEntries(sources.documents.map((doc, index) => [doc.key, String(index + 1)]));
   const titles = Object.fromEntries(sources.documents.map((doc) => [doc.key, documentTitle(doc)]));
   const writer = new PackWriter(out, fonts);
-  const facts = sources.records.map((record) => companyFacts(record, sources.documents, annexNo));
+  const facts = sources.records.map((record) => companyFacts(record, sources.documents, annexNo, { pep, packDay }));
   let part = 0;
   const nextPart = () => String.fromCharCode(65 + part++);
 
   writer.newPage();
-  writePackDetails(writer, nextPart(), { details, entity, brokerLegal, contractName, prepared, sources });
+  writePackDetails(writer, nextPart(), { details, entity, brokerLegal, contractName, prepared, sources, envelope, names, packDay });
+  writeSupplyChain(writer, nextPart(), names);
   const partFor = {};
   sources.records.forEach((record, index) => {
     partFor[record.roleKey] = nextPart();
     writeCompany(writer, partFor[record.roleKey], record, facts[index], annexNo);
   });
   writeDisclosures(writer, nextPart(), facts);
+  writeWorkerArrangements(writer, nextPart(), workerArrangements(envelope, names));
   const certTop = addCertificate(writer, nextPart(), { entity, brokerLegal, broker: sources.byRole.agency, details, sources, annexNo });
   const certPage = out.getPageCount() - 1;
 
@@ -164,11 +180,6 @@ export async function buildDueDiligencePdf(envelopeId) {
   return { bytes: Buffer.from(await out.save()), backPages, certPage, certTop };
 }
 
-function localDay() {
-  const day = new Date();
-  return `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, "0")}-${String(day.getDate()).padStart(2, "0")}`;
-}
-
 /** "UNION WORK SERVICES LIMITED (trading as Union Payroll)" as its name and its trading line. */
 function splitTrading(name) {
   const match = String(name).match(/^(.*?)\s*(\(trading as [^)]*\))\s*$/i);
@@ -227,7 +238,7 @@ const KV = [
   { label: "", width: CONTENT_W - 150 },
 ];
 
-function writePackDetails(writer, letter, { details, entity, brokerLegal, contractName, prepared, sources }) {
+function writePackDetails(writer, letter, { details, entity, brokerLegal, contractName, prepared, sources, envelope, names, packDay }) {
   writer.part(`Part ${letter} — Pack details`);
   const numbered = (name, number) => (number ? `${name || "—"}, company\u00a0number\u00a0${number}` : name || "—");
   const contractor = sources.records.find((record) => record.roleKey === "supplier");
@@ -242,9 +253,84 @@ function writePackDetails(writer, letter, { details, entity, brokerLegal, contra
       ["Contract", contractName],
       ["Pack reference", details.reference],
       ["Prepared", prepared],
+      ["Review frequency", REVIEW_FREQUENCIES[reviewFrequency(envelope)].label],
+      ["Next review", ukDate(nextReview(envelope, packDay))],
     ],
     { header: false, labelColumn: true }
   );
+  const frequency = REVIEW_FREQUENCIES[reviewFrequency(envelope)].label.toLowerCase();
+  writer.text(
+    `${names.broker} carries out ${frequency} checks of HMRC payments, Companies House records, sanctions screening and insurance for every company in this supply chain.`
+  );
+  writer.text(
+    names.four
+      ? `${names.contractor} and ${names.supplier} must tell ${names.broker} within 5 working days of any change to their directors, owners, insurance or HMRC position.`
+      : `${names.contractor} must tell ${names.broker} within 5 working days of any change to its directors, owners, insurance or HMRC position.`
+  );
+}
+
+function writeSupplyChain(writer, letter, names) {
+  writer.part(`Part ${letter} — Supply chain`);
+  drawChain(writer, [
+    { name: names.client, role: "agency" },
+    { name: names.broker, role: "broker" },
+    { name: names.contractor, role: names.four ? "payroll company" : "payroll company and employer" },
+    ...(names.four ? [{ name: names.supplier, role: "employer" }] : []),
+    { name: "Workers", role: "" },
+  ]);
+  writer.table(
+    KV,
+    [
+      ["Employer of the workers", names.employer],
+      ["Runs PAYE", names.employer],
+      ["PAYE reference", names.employerRecord?.payeReference || "—"],
+      ["Liable party for unpaid PAYE", `${names.client} (agency)`],
+    ],
+    { header: false, labelColumn: true }
+  );
+  writer.text(
+    `Under the umbrella company PAYE rules in force from 6 April 2026, if ${names.employer} fails to pay PAYE due on workers’ pay, HMRC can recover it from ${names.client} as the agency in this supply chain.`
+  );
+}
+
+/** The chain as boxes joined by arrows, left to right. */
+function drawChain(writer, nodes) {
+  const { font, bold, theme } = writer;
+  const gap = 18;
+  const boxW = (CONTENT_W - gap * (nodes.length - 1)) / nodes.length;
+  const laid = nodes.map((node) => ({
+    name: wrapText(node.name, bold, 8.5, boxW - 10),
+    role: node.role ? wrapText(node.role, font, 7.5, boxW - 10) : [],
+  }));
+  const contentH = (item) => item.name.length * 11 + item.role.length * 9.5 - 3;
+  const boxH = Math.max(...laid.map(contentH)) + 18;
+  writer.ensure(boxH + 22);
+  const page = writer.page;
+  const top = writer.y - 2;
+  laid.forEach((item, index) => {
+    const x = MARGIN + index * (boxW + gap);
+    page.drawRectangle({ x, y: top - boxH, width: boxW, height: boxH, color: theme.tint, borderColor: theme.accent, borderWidth: 0.8 });
+    let y = top - (boxH - contentH(item)) / 2 - 7;
+    for (const line of item.name) {
+      page.drawText(line, { x: x + (boxW - bold.widthOfTextAtSize(line, 8.5)) / 2, y, size: 8.5, font: bold, color: theme.ink });
+      y -= 11;
+    }
+    for (const line of item.role) {
+      page.drawText(line, { x: x + (boxW - font.widthOfTextAtSize(line, 7.5)) / 2, y: y + 1, size: 7.5, font, color: theme.muted });
+      y -= 9.5;
+    }
+    if (index < laid.length - 1) {
+      const mid = top - boxH / 2;
+      const from = x + boxW + 3;
+      const to = x + boxW + gap - 3;
+      const arrow = (x1, y1) =>
+        page.drawLine({ start: { x: x1, y: y1 }, end: { x: to, y: mid }, thickness: 1.2, color: theme.accent });
+      arrow(from, mid);
+      arrow(to - 4, mid + 3);
+      arrow(to - 4, mid - 3);
+    }
+  });
+  writer.y = top - boxH - 14;
 }
 
 /** The sanctions list is published as "24-Nov-2026". */
@@ -326,7 +412,11 @@ function writeCompany(writer, letter, record, fact, annexNo) {
     { label: "Result", width: 80, align: "center" },
     { label: "Annex", width: 60, align: "center" },
   ];
-  const checkRows = fact.declarations.map(([result, text, annex]) => [text, { result }, annex || "—"]);
+  const checkRows = fact.declarations.map(([result, text, annex]) => [
+    text,
+    typeof result === "object" ? result : { result },
+    annex || "—",
+  ]);
   writer.ensure(24 + writer.tableHeight(checkColumns, checkRows) + 20);
   writer.sub(`${letter}4  Checks`);
   writer.table(checkColumns, checkRows);
@@ -346,6 +436,19 @@ function writeDisclosures(writer, letter, facts) {
       { label: "Disclosure", width: CONTENT_W - 150 },
     ],
     rows.length ? rows : [["—", "None"]]
+  );
+}
+
+function writeWorkerArrangements(writer, letter, rows) {
+  writer.part(`Part ${letter} — Worker arrangements`);
+  writer.table(
+    [
+      { label: "Topic", width: 120 },
+      { label: "Arrangement", width: CONTENT_W - 200 },
+      { label: "Confirmed", width: 80, align: "center" },
+    ],
+    rows.map((row) => [row.label, row.text, row.confirmed ? { result: "clear", label: "Yes" } : { result: "na", label: "Pending" }]),
+    { labelColumn: true }
   );
 }
 
@@ -473,7 +576,7 @@ function companyChanges(profile, officers, pscs, mine) {
 }
 
 /** Declarations and disclosures come only from what this pack holds, so nothing is asserted that was not checked. */
-function companyFacts(record, documents, annexNo) {
+function companyFacts(record, documents, annexNo, { pep, packDay }) {
   const bundle = record.directoryId ? registryBundle(record.directoryId) : null;
   const profile = bundle?.profile || {};
   const officers = bundle?.officers || [];
@@ -486,20 +589,39 @@ function companyFacts(record, documents, annexNo) {
   const result = (value) => (value == null ? "na" : value ? "clear" : "flag");
   const accountsOverdue = /overdue/i.test(profile.accounts || "");
   const statementOverdue = /overdue/i.test(profile.confirmationStatement || "");
+  const people = pep.filter((row) => row.roleKey === record.roleKey);
+  const insurance = Object.fromEntries(insuranceChecks(record, packDay).map((row) => [row.key, row]));
+  const insuranceRow = (key) => [insurance[key]?.result || "flag", insurance[key]?.text || "", annex(insurance[key]?.certificate)];
   const declarations = [
     [result(profile.status ? /^active$/i.test(profile.status) : null), "Active at Companies House", ""],
     [result(profile.accounts ? !accountsOverdue : null), "Accounts up to date", ""],
     [result(profile.confirmationStatement ? !statementOverdue : null), "Confirmation statement up to date", ""],
     [result(sanctions ? !sanctions.hitCount : false), "UK Sanctions List screening", annex("sanctions")],
+    ...people.map((person) => [
+      person.verified == null
+        ? { result: "na" }
+        : person.verified
+          ? { result: "clear", label: "Verified" }
+          : { result: "flag", label: "Not verified" },
+      `Companies House identity verification: ${person.name} (${rolesText(person.roles)})${
+        person.verified === false && person.verificationDueOn ? `, statement due ${chDate(person.verificationDueOn)}` : ""
+      }`,
+      "",
+    ]),
+    ...people.map((person) => [
+      person.approvedOn ? { result: person.result } : { result: "na", label: "Pending" },
+      `PEP and adverse media screening: ${person.name} (${rolesText(person.roles)}), ${
+        person.approvedOn ? `approved by ${person.approvedBy} on ${ukDate(person.approvedOn)}` : "awaiting approval"
+      }`,
+      "",
+    ]),
   ];
   if (record.roleKey === "supplier") {
     declarations.push(
       [result(has("vat")), "VAT registration certificate", annex("vat")],
-      [
-        result(has("el_certificate", "pl_certificate", "pi_certificate")),
-        "Employers’ Liability, Public Liability and Professional Indemnity certificates",
-        annex("el_certificate", "pl_certificate", "pi_certificate"),
-      ],
+      insuranceRow("el"),
+      insuranceRow("pl"),
+      insuranceRow("pi"),
       [result(has("pi_schedule")), "Professional Indemnity policy schedule and wording", annex("pi_schedule")],
       [result(has("bank")), "Bank statement for the account paying workers and HMRC", annex("bank")],
       [result(has("payslip")), "Illustrative payslip", annex("payslip")],
@@ -512,11 +634,8 @@ function companyFacts(record, documents, annexNo) {
   } else {
     declarations.push(
       [result(has("paye_letter")), "HMRC PAYE registration letter", annex("paye_letter")],
-      [
-        result(has("el_certificate", "el_schedule")),
-        "Employers’ Liability certificate and policy pages naming the SPV",
-        annex("el_certificate", "el_schedule"),
-      ]
+      insuranceRow("el"),
+      [result(has("el_schedule")), "Employers’ Liability policy pages naming the SPV", annex("el_schedule")]
     );
   }
 
@@ -603,7 +722,7 @@ function addCertificate(writer, letter, { entity, brokerLegal, broker, details, 
     .filter(Boolean)
     .join(" and ");
   const statements = [
-    `I have reviewed the Companies House records, UK Sanctions List screening and annexed documents for ${companies || "the companies in this pack"}.`,
+    `I have reviewed the Companies House records, UK Sanctions List screening and annexed documents for ${companies || "the companies in this pack"}, including Companies House identity verification and PEP and adverse media screening for every director and PSC.`,
     "Each document was received and checked on the dates in the annex index.",
     `HMRC registration is evidenced by ${hmrc || "the annexed documents"}.`,
     "The declarations and disclosures are complete and accurate. I am not aware of any further matter material to the Client’s assessment of the supply chain.",

@@ -332,8 +332,109 @@ function PartyEditor({ kind, copy, id }) {
               </div>
             ))}
           </section>
+          <PayeInsurance key={record.id} record={record} onSaved={setRecord} />
         </>
       ) : null}
     </div>
+  );
+}
+
+function detailsFrom(record) {
+  return {
+    payeReference: record.paye_reference || "",
+    insurance: Object.fromEntries(
+      (record.insurance || []).map((policy) => [
+        policy.key,
+        {
+          insurer: policy.insurer,
+          policyNumber: policy.policyNumber,
+          cover: policy.cover == null ? "" : String(policy.cover),
+          expiresOn: policy.expiresOn,
+        },
+      ])
+    ),
+  };
+}
+
+function PayeInsurance({ record, onSaved }) {
+  const [form, setForm] = useState(() => detailsFrom(record));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+
+  const setPolicy = (key, field) => (e) =>
+    setForm((current) => ({
+      ...current,
+      insurance: { ...current.insurance, [key]: { ...current.insurance[key], [field]: e.target.value } },
+    }));
+
+  async function onSubmit(event) {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const saved = await api.savePartyDetails(record.id, form);
+      onSaved(saved);
+      setForm(detailsFrom(saved));
+      setNotice("Saved");
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <form className="panel form-grid" style={{ marginTop: "1rem" }} onSubmit={onSubmit}>
+      <h2>PAYE and insurance</h2>
+      {error ? <p className="error">{error}</p> : null}
+      {notice ? <p className="meta">{notice}</p> : null}
+      <label>
+        PAYE reference
+        <input
+          value={form.payeReference}
+          onChange={(e) => setForm((current) => ({ ...current, payeReference: e.target.value }))}
+          placeholder="123/AB45678"
+        />
+      </label>
+      <p className="muted">Needed when this company employs the workers.</p>
+      {(record.insurance || []).map((policy) => {
+        const value = form.insurance[policy.key] || {};
+        return (
+          <div key={policy.key}>
+            <strong>{policy.label}</strong>
+            <div className="signer-row">
+              <label>
+                Insurer
+                <input value={value.insurer || ""} onChange={setPolicy(policy.key, "insurer")} />
+              </label>
+              <label>
+                Policy number
+                <input value={value.policyNumber || ""} onChange={setPolicy(policy.key, "policyNumber")} />
+              </label>
+            </div>
+            <div className="signer-row">
+              <label>
+                Cover (£)
+                <input
+                  inputMode="numeric"
+                  value={value.cover || ""}
+                  onChange={setPolicy(policy.key, "cover")}
+                  placeholder={policy.key === "el" ? "5000000" : ""}
+                />
+              </label>
+              <label>
+                Expiry
+                <input type="date" value={value.expiresOn || ""} onChange={setPolicy(policy.key, "expiresOn")} />
+              </label>
+            </div>
+          </div>
+        );
+      })}
+      <button className="btn" type="submit" disabled={busy}>
+        {busy ? "Saving…" : "Save PAYE and insurance"}
+      </button>
+    </form>
   );
 }

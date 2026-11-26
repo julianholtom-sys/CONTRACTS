@@ -56,6 +56,19 @@ export const OFFICE_CHANGE_ITEM = [
   "Change of registered office (AD01)",
 ];
 
+/** Insurance details entered on each company record, with the certificate that evidences each policy. */
+export const INSURANCE_POLICIES = {
+  contractor: [
+    ["el", "Employers’ Liability", "el_certificate"],
+    ["pl", "Public Liability", "pl_certificate"],
+    ["pi", "Professional Indemnity", "pi_certificate"],
+  ],
+  supplier: [["el", "Employers’ Liability", "el_certificate"]],
+};
+
+/** Employers’ Liability cover below this is flagged in the pack. */
+export const EL_MINIMUM_COVER = 5000000;
+
 /**
  * Files a person attaches when the contractor or supplier is added.
  * Companies House filings and the UK sanctions check are fetched from the

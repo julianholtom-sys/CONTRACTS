@@ -272,6 +272,21 @@ export function migrate() {
   ensureColumn("directory_parties", "registered_office", "TEXT NOT NULL DEFAULT ''");
   ensureColumn("directory_parties", "normal_name", "TEXT NOT NULL DEFAULT ''");
   ensureColumn("envelope_doc_checks", "checked_by", "TEXT");
+  ensureColumn("directory_parties", "paye_reference", "TEXT NOT NULL DEFAULT ''");
+  ensureColumn("directory_parties", "insurance_json", "TEXT");
+  ensureColumn("envelopes", "dd_review_frequency", "TEXT");
+  ensureColumn("envelopes", "dd_worker_json", "TEXT");
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS envelope_pep_checks (
+      envelope_id TEXT NOT NULL REFERENCES envelopes(id),
+      role_key TEXT NOT NULL,
+      person_key TEXT NOT NULL,
+      result TEXT NOT NULL DEFAULT 'clear' CHECK (result IN ('clear','flag')),
+      approved_by TEXT,
+      approved_on TEXT,
+      PRIMARY KEY (envelope_id, role_key, person_key)
+    );
+  `);
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS envelope_fields (

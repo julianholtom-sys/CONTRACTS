@@ -66,6 +66,12 @@ export const api = {
       body: JSON.stringify(body),
     }),
   fetchPartyRegistry: (id) => request(`/api/parties/${id}/registry`, { method: "POST" }),
+  savePartyDetails: (id, body) =>
+    request(`/api/parties/${id}/details`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
   companyLookup: (number) => request(`/api/companies-house/${encodeURIComponent(number)}`),
   uploadPartyFile: (id, requirementKey, file) => {
     const body = new FormData();
@@ -79,6 +85,24 @@ export const api = {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ checks }),
+    }),
+  saveDiligenceSettings: (id, body) =>
+    request(`/api/envelopes/${id}/dd/settings`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  savePepCheck: (id, body) =>
+    request(`/api/envelopes/${id}/dd/pep`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  confirmWorkerArrangement: (id, body) =>
+    request(`/api/envelopes/${id}/dd/worker`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
     }),
   saveBrokerSignatory: (entityId, body) =>
     request(`/api/entities/${entityId}/signatory`, {

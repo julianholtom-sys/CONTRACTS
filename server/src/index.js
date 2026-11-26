@@ -41,6 +41,7 @@ import {
   readPartyFile,
   refreshPartyRegistry,
   saveDocChecks,
+  savePartyDetails,
   savePartyRecord,
   savePartyUpload,
 } from "./partyRecords.js";
@@ -49,11 +50,14 @@ import {
   assertContractMayBeIssued,
   assertDdEditable,
   compileDueDiligence,
+  confirmWorkerArrangement,
   diligenceSession,
   dueDiligenceState,
   readDueDiligence,
   removeNameChange,
+  saveDiligenceSettings,
   saveDueDiligenceFile,
+  savePepCheck,
   setOfficeChanged,
   signDueDiligence,
   submitDueDiligence,
@@ -326,6 +330,14 @@ app.patch("/api/parties/:id", (req, res) => {
 app.get("/api/companies-house/:number", async (req, res) => {
   try {
     res.json(await lookupCompany(req.params.number));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.put("/api/parties/:id/details", (req, res) => {
+  try {
+    res.json(savePartyDetails(req.params.id, req.body || {}));
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
@@ -1592,6 +1604,32 @@ app.post("/api/envelopes/:id/dd/office-changed", (req, res) => {
     res.json(setOfficeChanged(req.params.id, Boolean(req.body?.enabled)));
   } catch (err) {
     res.status(400).json({ error: err.message || "Could not update registered office" });
+  }
+});
+
+const staffName = (req) => req.user?.name || req.user?.email || "";
+
+app.put("/api/envelopes/:id/dd/settings", (req, res) => {
+  try {
+    res.json(saveDiligenceSettings(req.params.id, req.body || {}));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post("/api/envelopes/:id/dd/pep", (req, res) => {
+  try {
+    res.json(savePepCheck(req.params.id, req.body || {}, staffName(req)));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post("/api/envelopes/:id/dd/worker", (req, res) => {
+  try {
+    res.json(confirmWorkerArrangement(req.params.id, req.body || {}, staffName(req)));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
   }
 });
 
