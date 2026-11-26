@@ -111,29 +111,41 @@ export function pepRows(envelopeId, records) {
 
 const pounds = (amount) => `£${Number(amount).toLocaleString("en-GB")}`;
 
-/** One check row per policy, flagged on low Employers’ Liability cover or an expiry within 30 days of the pack date. */
+/** Flagged on low Employers’ Liability cover or an expiry within 30 days of the pack date. */
+function policyCheck(policy, packDay, holder = "") {
+  const reasons = [];
+  if (policy.key === "el" && policy.cover != null && policy.cover < EL_MINIMUM_COVER) {
+    reasons.push(`cover under ${pounds(EL_MINIMUM_COVER)}`);
+  }
+  if (policy.expiresOn) {
+    const days = daysBetween(packDay, policy.expiresOn);
+    if (days < 0) reasons.push("expired");
+    else if (policy.key === "el" && days <= 30) reasons.push("expires within 30 days");
+  }
+  const complete = policy.insurer && policy.policyNumber && policy.cover != null && policy.expiresOn;
+  const details = complete
+    ? `${holder ? `added to ${holder}’s policy, ` : ""}${policy.insurer}, policy ${policy.policyNumber}, cover ${pounds(policy.cover)}${
+        holder ? " (shared limit)" : ""
+      }, expires ${ukDate(policy.expiresOn)}`
+    : "details not entered";
+  return {
+    key: policy.key,
+    certificate: policy.certificate,
+    result: complete && !reasons.length ? "clear" : "flag",
+    text: `${policy.label} insurance: ${details}${reasons.length ? ` (${reasons.join(", ")})` : ""}`,
+  };
+}
+
+/** One check row per policy on the company’s own record. */
 export function insuranceChecks(record, packDay) {
-  return (record.insurance || []).map((policy) => {
-    const reasons = [];
-    if (policy.key === "el" && policy.cover != null && policy.cover < EL_MINIMUM_COVER) {
-      reasons.push(`cover under ${pounds(EL_MINIMUM_COVER)}`);
-    }
-    if (policy.expiresOn) {
-      const days = daysBetween(packDay, policy.expiresOn);
-      if (days < 0) reasons.push("expired");
-      else if (policy.key === "el" && days <= 30) reasons.push("expires within 30 days");
-    }
-    const complete = policy.insurer && policy.policyNumber && policy.cover != null && policy.expiresOn;
-    const details = complete
-      ? `${policy.insurer}, policy ${policy.policyNumber}, cover ${pounds(policy.cover)}, expires ${ukDate(policy.expiresOn)}`
-      : "details not entered";
-    return {
-      key: policy.key,
-      certificate: policy.certificate,
-      result: complete && !reasons.length ? "clear" : "flag",
-      text: `${policy.label} insurance: ${details}${reasons.length ? ` (${reasons.join(", ")})` : ""}`,
-    };
-  });
+  return (record.insurance || []).map((policy) => policyCheck(policy, packDay));
+}
+
+/** The Supplier is added to the contractor’s Employers’ Liability policy, so its row reads that policy. */
+export function addedEmployerCheck(contractor, packDay) {
+  const policy = (contractor?.insurance || []).find((item) => item.key === "el");
+  if (!policy) return { key: "el", result: "flag", text: "Employers’ Liability insurance: details not entered" };
+  return policyCheck(policy, packDay, contractor.companyName);
 }
 
 /** The names the pack's prose uses, in normal case, for this contract's chain. */

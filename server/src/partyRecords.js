@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { db, newId, now } from "./db.js";
-import { INSURANCE_POLICIES, PARTY_LABELS, PARTY_UPLOADS, SIGNING_UPLOADS } from "./parties.js";
+import { FOUR_WAY_UPLOADS, INSURANCE_POLICIES, PARTY_LABELS, PARTY_UPLOADS, SIGNING_UPLOADS } from "./parties.js";
 import { dropSignatureIfSignerChanged, signatureView } from "./savedSignatures.js";
 import { downloadFiling, fetchCompanyRecord, filingLabel, normaliseCompanyNumber } from "./companiesHouse.js";
 import { screenNames } from "./sanctions.js";
@@ -49,6 +49,7 @@ export function serializeRecord(row) {
     return { key, label, file: publicFile(file) };
   };
   const uploadViews = (PARTY_UPLOADS[row.kind] || []).map(uploadView);
+  const fourWayViews = (FOUR_WAY_UPLOADS[row.kind] || []).map(uploadView);
   let sanctions = null;
   if (registry?.sanctions_json) {
     try {
@@ -105,9 +106,27 @@ export function serializeRecord(row) {
     companiesHouseFiles: files.filter((file) => file.source === "companies_house").map(publicFile),
     uploads: uploadViews,
     uploadsComplete: uploadViews.every((item) => item.file),
+    fourWayUploads: fourWayViews.some((item) => item.file) || onFourWay(row) ? fourWayViews : [],
     signingUploads: (SIGNING_UPLOADS[row.kind] || []).map(uploadView),
     signature: signatureView(row),
   };
+}
+
+/** Whether this contractor is the Contractor on any 4-way contract. */
+function onFourWay(row) {
+  if (row.kind !== "contractor") return false;
+  return Boolean(
+    db
+      .prepare(
+        `SELECT 1 FROM envelope_parties p
+         JOIN template_roles r ON r.id = p.role_id
+         JOIN envelopes e ON e.id = p.envelope_id
+         WHERE e.party_shape = 'four' AND r.role_key = 'supplier'
+           AND (p.directory_party_id = ? OR (p.directory_party_id IS NULL AND lower(p.company_name) = lower(?)))
+         LIMIT 1`
+      )
+      .get(row.id, row.company_name)
+  );
 }
 
 /** Each policy asked for on this kind of company, with whatever has been entered for it. */
@@ -328,7 +347,11 @@ function storedName(filing) {
 export function savePartyUpload(partyId, requirementKey, file) {
   const party = partyRow(partyId);
   if (!party) throw new Error("Company record not found");
-  const allowed = [...(PARTY_UPLOADS[party.kind] || []), ...(SIGNING_UPLOADS[party.kind] || [])];
+  const allowed = [
+    ...(PARTY_UPLOADS[party.kind] || []),
+    ...(FOUR_WAY_UPLOADS[party.kind] || []),
+    ...(SIGNING_UPLOADS[party.kind] || []),
+  ];
   const match = allowed.find(([key]) => key === requirementKey);
   if (!match) throw new Error("That document is not requested for this company");
   if (!file?.buffer?.length) throw new Error("Choose a file");
@@ -470,7 +493,8 @@ export function packSources(envelopeId) {
         partyId: record.id,
       });
     }
-    for (const [key, uploadLabel] of PARTY_UPLOADS[kind] || []) {
+    const uploads = [...(PARTY_UPLOADS[kind] || []), ...(envelope?.party_shape === "four" ? FOUR_WAY_UPLOADS[kind] || [] : [])];
+    for (const [key, uploadLabel] of uploads) {
       const file = [...files].reverse().find((item) => item.source === "upload" && item.requirement_key === key);
       if (!file) {
         missing.push(`${label}: ${uploadLabel}`);

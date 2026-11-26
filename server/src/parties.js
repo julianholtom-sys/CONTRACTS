@@ -32,7 +32,7 @@ export const FINAL_EVIDENCE = {
 /**
  * Documents requested before the due diligence pack is compiled.
  * Drawn from the Union Payroll contractor pack (incorporation, VAT, PSC,
- * insurance, bank evidence, payslip; supplier incorporation, PAYE letter, EL).
+ * insurance, bank evidence, payslip; supplier incorporation, PAYE letter).
  * Name-change certificates are added per declared change, not listed here.
  */
 export const DD_REQUIREMENTS = {
@@ -50,7 +50,6 @@ export const DD_REQUIREMENTS = {
   spv: [
     ["incorporation", "Certificate of incorporation"],
     ["paye_letter", "HMRC PAYE reference letter"],
-    ["el_certificate", "Employers' liability certificate"],
   ],
 };
 
@@ -66,7 +65,6 @@ export const INSURANCE_POLICIES = {
     ["pl", "Public Liability", "pl_certificate"],
     ["pi", "Professional Indemnity", "pi_certificate"],
   ],
-  supplier: [["el", "Employers’ Liability", "el_certificate"]],
 };
 
 /** Employers’ Liability cover below this is flagged in the pack. */
@@ -88,10 +86,17 @@ export const PARTY_UPLOADS = {
     ["payslip", "Illustrative payslip"],
     ["payroll_chain", "Payroll chain map and PAYE/ERN confirmation"],
   ],
-  supplier: [
-    ["paye_letter", "HMRC PAYE registration letter"],
-    ["el_certificate", "Employers’ Liability certificate"],
-    ["el_schedule", "Employers’ Liability policy pages naming the SPV"],
+  supplier: [["paye_letter", "HMRC PAYE registration letter"]],
+};
+
+/**
+ * The Supplier has no insurance of its own: it is added to the contractor’s
+ * Employers’ Liability policy, so on a 4-way the contractor supplies the evidence.
+ */
+export const FOUR_WAY_UPLOADS = {
+  contractor: [
+    ["el_supplier_certificate", "Employers’ Liability certificate naming the Supplier"],
+    ["el_supplier_pages", "Employers’ Liability policy pages adding the Supplier"],
   ],
 };
 

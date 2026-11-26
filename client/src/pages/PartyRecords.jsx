@@ -16,7 +16,7 @@ const COPY = {
     title: "Suppliers",
     one: "Supplier",
     path: "/suppliers",
-    intro: "Add the company number, the HMRC PAYE letter and the Employers’ Liability documents.",
+    intro: "Add the company number and the HMRC PAYE letter.",
   },
 };
 
@@ -323,6 +323,15 @@ function PartyEditor({ kind, copy, id }) {
               <UploadRow key={item.key} item={item} disabled={Boolean(busy)} onUpload={onUpload} />
             ))}
           </section>
+          {record.fourWayUploads?.length ? (
+            <section className="panel form-grid" style={{ marginTop: "1rem" }}>
+              <h2>On a 4-way</h2>
+              <p className="muted">From this contractor’s Employers’ Liability policy.</p>
+              {record.fourWayUploads.map((item) => (
+                <UploadRow key={item.key} item={item} disabled={Boolean(busy)} onUpload={onUpload} />
+              ))}
+            </section>
+          ) : null}
           {details ? <PayeInsurance record={record} value={details} onChange={setDetails} /> : null}
           <section className="panel form-grid" style={{ marginTop: "1rem" }}>
             <h2>Signing</h2>
@@ -410,7 +419,7 @@ function PayeInsurance({ record, value: form, onChange }) {
 
   return (
     <section className="panel form-grid" style={{ marginTop: "1rem" }}>
-      <h2>PAYE and insurance</h2>
+      <h2>{record.insurance?.length ? "PAYE and insurance" : "PAYE reference"}</h2>
       <label>
         PAYE reference
         <input

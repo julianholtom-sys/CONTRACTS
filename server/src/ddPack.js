@@ -6,6 +6,7 @@ import { coverDetails, coverTokens, ukDate } from "./coverStamp.js";
 import { packSources, registryBundle } from "./partyRecords.js";
 import {
   REVIEW_FREQUENCIES,
+  addedEmployerCheck,
   chainNames,
   insuranceChecks,
   localDay,
@@ -111,7 +112,10 @@ export async function buildDueDiligencePdf(envelopeId) {
   const annexNo = Object.fromEntries(sources.documents.map((doc, index) => [doc.key, String(index + 1)]));
   const titles = Object.fromEntries(sources.documents.map((doc) => [doc.key, documentTitle(doc)]));
   const writer = new PackWriter(out, fonts);
-  const facts = sources.records.map((record) => companyFacts(record, sources.documents, annexNo, { pep, packDay }));
+  const contractorRecord = sources.records.find((record) => record.roleKey === "supplier");
+  const facts = sources.records.map((record) =>
+    companyFacts(record, sources.documents, annexNo, { pep, packDay, contractor: contractorRecord })
+  );
   let part = 0;
   const nextPart = () => String.fromCharCode(65 + part++);
 
@@ -603,7 +607,7 @@ function companyChanges(profile, officers, pscs, mine) {
 }
 
 /** Declarations and disclosures come only from what this pack holds, so nothing is asserted that was not checked. */
-function companyFacts(record, documents, annexNo, { pep, packDay }) {
+function companyFacts(record, documents, annexNo, { pep, packDay, contractor }) {
   const bundle = record.directoryId ? registryBundle(record.directoryId) : null;
   const profile = bundle?.profile || {};
   const officers = bundle?.officers || [];
@@ -659,10 +663,13 @@ function companyFacts(record, documents, annexNo, { pep, packDay }) {
       ]
     );
   } else {
+    const added = addedEmployerCheck(contractor, packDay);
+    const evidence = documents.filter(
+      (doc) => doc.partyId === contractor?.directoryId && ["el_supplier_certificate", "el_supplier_pages"].includes(doc.requirementKey)
+    );
     declarations.push(
       [result(has("paye_letter")), "HMRC PAYE registration letter", annex("paye_letter")],
-      insuranceRow("el"),
-      [result(has("el_schedule")), "Employers’ Liability policy pages naming the SPV", annex("el_schedule")]
+      [evidence.length === 2 ? added.result : "flag", added.text, annexList(evidence.map((doc) => annexNo[doc.key]))]
     );
   }
 

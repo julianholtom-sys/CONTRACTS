@@ -350,8 +350,8 @@ export default function CreateEnvelope() {
                 showCompanyNumber
               />
               <p className="muted">
-                The PAYE letter, the Employers’ Liability documents, the signature and the director ID are added on the
-                supplier record.
+                The PAYE letter, the signature and the director ID are added on the supplier record. The Employers’
+                Liability documents naming the supplier are on the contractor record.
               </p>
             </section>
           ) : null}
