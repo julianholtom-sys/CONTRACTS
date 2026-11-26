@@ -8,7 +8,7 @@ import { envelopePlacedFields, fieldsForParty } from "./documentFields.js";
 import { FINAL_EVIDENCE, PARTY_LABELS, SIGNS_BY_LINK } from "./parties.js";
 import { assertClientMayBeInvited, assertContractMayBeIssued } from "./dueDiligence.js";
 import { localDay } from "./ddChecks.js";
-import { ukDate } from "./coverStamp.js";
+import { stampContractDates, ukDate } from "./coverStamp.js";
 import { SIGNATURE_MAX_HEIGHT } from "./signatureInput.js";
 import {
   directorIdFile,
@@ -656,6 +656,7 @@ export async function finalizeEnvelope(envelopeId) {
   const pages = pdf.getPages();
   const placed = envelopePlacedFields(envelopeId);
   const pageOffset = Number(envelope.contract_page_offset || 0);
+  if (envelope.baked_clean_ref && pages[pageOffset]) stampContractDates(pages[pageOffset], font, envelope);
 
   const signatures = db
     .prepare("SELECT * FROM signatures WHERE envelope_id = ?")

@@ -1,5 +1,5 @@
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
-import { coverDetails, coverTokens, stampCoverDetails, ukDate } from "./coverStamp.js";
+import { coverDetails, coverTokens, stampContractDates, stampCoverDetails, ukDate } from "./coverStamp.js";
 import { addBrandedBackCover, addBrandedCover, brokerLegalName, packTheme } from "./packLayout.js";
 import { db, newId, now, sha256, parseJson } from "./db.js";
 import { appendEvent } from "./events.js";
@@ -331,21 +331,6 @@ export async function bakeEnvelope(envelopeId, { actor = "system" } = {}) {
           color: rgb(0.25, 0.25, 0.25),
         }
       );
-      const meta = [
-        envelope.prepared_on ? `Prepared ${ukDate(envelope.prepared_on)}` : null,
-        envelope.issued_at ? `Issued ${ukDate(envelope.issued_at)}` : "Issued on send",
-      ]
-        .filter(Boolean)
-        .join(" · ");
-      if (meta) {
-        firstContract.drawText(meta, {
-          x: 40,
-          y: 40,
-          size: 8,
-          font,
-          color: rgb(0.25, 0.25, 0.25),
-        });
-      }
       if (brand.logo) {
         try {
           const logoImage = await embedLogoImage(bakedDoc, brand.logo);
@@ -417,12 +402,18 @@ export async function bakeEnvelope(envelopeId, { actor = "system" } = {}) {
         `The master contract has no signature field for: ${names}. Replace the master contract with one that names each party, then bake again.`
       );
     }
-    // The signed copy is stamped onto this one, so it carries no field boxes or captions.
-    const cleanFile = writeBytes("baked", `${envelopeId}-clean.pdf`, Buffer.from(await bakedDoc.save()));
-    for (const field of placedFields) {
-      const page = bakedDoc.getPages()[
-        Math.min(Number(field.page || 0), bakedDoc.getPageCount() - 1)
-      ];
+    // The signed copy is stamped onto this one, so it carries no field boxes or captions,
+    // and its issue date is added when it is signed.
+    const cleanBytes = Buffer.from(await bakedDoc.save());
+    const cleanFile = writeBytes("baked", `${envelopeId}-clean.pdf`, cleanBytes);
+    // pdf-lib caches page content on save, so anything drawn on bakedDoc from here on would be lost.
+    const previewDoc = await PDFDocument.load(cleanBytes);
+    const previewFont = await previewDoc.embedFont(StandardFonts.Helvetica);
+    const previewPages = previewDoc.getPages();
+    if (previewPages[contractStartIndex]) stampContractDates(previewPages[contractStartIndex], previewFont, envelope);
+    const partyRoles = new Set(parties.map((party) => party.role_id));
+    for (const field of placedFields.filter((f) => partyRoles.has(f.role_id))) {
+      const page = previewPages[Math.min(Number(field.page || 0), previewPages.length - 1)];
       const x = Number(field.x);
       const y = Number(field.y);
       const w = Number(field.w);
@@ -442,13 +433,13 @@ export async function bakeEnvelope(envelopeId, { actor = "system" } = {}) {
         x: x + 3,
         y: y + Math.max(h - 10, 2),
         size: 8,
-        font,
+        font: previewFont,
         color: rgb(0.05, 0.35, 0.32),
       });
     }
 
     void bold;
-    const bakedBytes = Buffer.from(await bakedDoc.save());
+    const bakedBytes = Buffer.from(await previewDoc.save());
     const bakedFile = writeBytes("baked", `${envelopeId}-baked.pdf`, bakedBytes);
 
     const docId = newId();
@@ -527,7 +518,7 @@ export async function bakeEnvelope(envelopeId, { actor = "system" } = {}) {
 export async function bakeInSignedPack(envelopeId, { actor = "staff" } = {}) {
   const envelope = db.prepare("SELECT * FROM envelopes WHERE id = ?").get(envelopeId);
   if (envelope?.status !== "ready" || !envelope.dd_validated_at) return false;
-  if (envelope.baked_dd_sha256 === envelope.dd_sha256) return false;
+  if (envelope.baked_dd_sha256 === envelope.dd_sha256 && envelope.baked_clean_ref) return false;
   await bakeEnvelope(envelopeId, { actor });
   return true;
 }

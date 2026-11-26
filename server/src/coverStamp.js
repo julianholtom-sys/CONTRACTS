@@ -57,6 +57,19 @@ export function ukDate(value) {
   return match ? `${match[3]}/${match[2]}/${match[1]}` : String(value || "");
 }
 
+export function stampContractDates(page, font, envelope) {
+  const issued = envelope.issued_at ? new Date(envelope.issued_at) : null;
+  const line = [
+    envelope.prepared_on ? `Prepared ${ukDate(envelope.prepared_on)}` : null,
+    issued
+      ? `Issued ${String(issued.getDate()).padStart(2, "0")}/${String(issued.getMonth() + 1).padStart(2, "0")}/${issued.getFullYear()}`
+      : "Issued on send",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  page.drawText(line, { x: 40, y: 40, size: 8, font, color: rgb(0.25, 0.25, 0.25) });
+}
+
 /** Standard PDF fonts only draw Latin-1; map typographic punctuation first. */
 export function pdfText(value) {
   return String(value || "")
