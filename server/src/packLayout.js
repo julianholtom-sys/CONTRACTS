@@ -366,6 +366,17 @@ export class PackWriter {
   }
 }
 
+/** Caption at the top of an annex page; later pages of the same document say "(continued)". */
+export function drawCaption(page, { font, bold, theme }, caption, continued = false) {
+  if (continued) {
+    const line = wrapText(`${caption} (continued)`, font, 8, CONTENT_W)[0];
+    page.drawText(line, { x: MARGIN, y: BODY_TOP - 9, size: 8, font, color: theme.muted });
+    return;
+  }
+  const line = wrapText(caption, bold, 9.5, CONTENT_W)[0];
+  page.drawText(line, { x: MARGIN, y: BODY_TOP - 10, size: 9.5, font: bold, color: theme.ink });
+}
+
 /** Draws a source page (or image) scaled into the body of an annex page, framed, honouring /Rotate. */
 export function placeInBody(page, embedded, { top, bottom, rotation = 0, rule }) {
   const angle = ((rotation % 360) + 360) % 360;

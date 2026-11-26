@@ -10,6 +10,7 @@ import { assertClientMayBeInvited, assertContractMayBeIssued } from "./dueDilige
 import { localDay } from "./ddChecks.js";
 import { stampContractDates, ukDate } from "./coverStamp.js";
 import { SIGNATURE_MAX_HEIGHT } from "./signatureInput.js";
+import { appendBoundAttachments, listSigningAttachments } from "./boundDocuments.js";
 import {
   directorIdFile,
   directorIdRequirement,
@@ -493,157 +494,6 @@ export async function applySignatureAndCompleteParty({
   return { nextPartyId: null, completed: true, signatureId: sigId };
 }
 
-function pdfText(value) {
-  return String(value || "").replace(/[^\x20-\x7E]/g, " ");
-}
-
-/** Signing attachments, in sign order, ready to bind after the signed contract. */
-export function listSigningAttachments(envelopeId) {
-  const parties = db
-    .prepare(
-      `SELECT p.id, p.signer_name, r.role_key, r.label AS role_label
-       FROM envelope_parties p
-       JOIN template_roles r ON r.id = p.role_id
-       WHERE p.envelope_id = ?
-       ORDER BY p.order_index ASC`
-    )
-    .all(envelopeId);
-  const files = db
-    .prepare(
-      `SELECT f.*, r.requirement_key, r.label
-       FROM evidence_files f
-       JOIN evidence_requirements r ON r.id = f.requirement_id
-       WHERE f.envelope_id = ? AND f.deleted_at IS NULL`
-    )
-    .all(envelopeId);
-  const entries = [];
-  for (const party of parties) {
-    const keys = FINAL_EVIDENCE[party.role_key] || [];
-    const allowed = new Set(keys.map(([key]) => key));
-    const mine = files.filter(
-      (file) => file.party_id === party.id && allowed.has(file.requirement_key)
-    );
-    const used = new Set();
-    const pushFile = (file, label) => {
-      used.add(file.id);
-      entries.push({
-        heading: `${party.role_label} - ${label}`,
-        detail: `${party.signer_name} · ${file.original_name || "attachment"}`,
-        bytes: readBytes(file.storage_ref),
-      });
-    };
-    for (const [key, label] of keys) {
-      const file = mine.find((row) => row.requirement_key === key);
-      if (file) pushFile(file, file.label || label);
-    }
-    for (const file of mine) {
-      if (!used.has(file.id)) pushFile(file, file.label || file.requirement_key);
-    }
-  }
-  return entries;
-}
-
-async function drawAttachmentNote(pdf, font, bold, entry, note) {
-  const page = pdf.addPage([595.28, 841.89]);
-  page.drawText(pdfText(entry.heading).slice(0, 90), {
-    x: 48,
-    y: 780,
-    size: 16,
-    font: bold,
-    color: rgb(0.1, 0.12, 0.16),
-  });
-  page.drawText(pdfText(entry.detail).slice(0, 110), {
-    x: 48,
-    y: 752,
-    size: 11,
-    font,
-    color: rgb(0.2, 0.24, 0.3),
-  });
-  page.drawText(pdfText(note), {
-    x: 48,
-    y: 720,
-    size: 11,
-    font,
-    color: rgb(0.1, 0.12, 0.16),
-  });
-}
-
-/** Bind each requested attachment. */
-export async function appendBoundAttachments(pdf, entries) {
-  const font = await pdf.embedFont(StandardFonts.Helvetica);
-  const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
-  for (const entry of entries) {
-    const bytes = Buffer.from(entry.bytes);
-    if (bytes.slice(0, 5).toString() === "%PDF-") {
-      let src;
-      try {
-        src = await PDFDocument.load(bytes);
-      } catch {
-        await drawAttachmentNote(
-          pdf,
-          font,
-          bold,
-          entry,
-          "This PDF could not be embedded. The original file is stored with the contract record."
-        );
-        continue;
-      }
-      const slip = pdf.addPage([595.28, 841.89]);
-      slip.drawText(pdfText(entry.heading).slice(0, 90), {
-        x: 48,
-        y: 780,
-        size: 16,
-        font: bold,
-        color: rgb(0.1, 0.12, 0.16),
-      });
-      slip.drawText(pdfText(entry.detail).slice(0, 110), {
-        x: 48,
-        y: 752,
-        size: 11,
-        font,
-        color: rgb(0.2, 0.24, 0.3),
-      });
-      const copied = await pdf.copyPages(src, src.getPageIndices());
-      for (const page of copied) pdf.addPage(page);
-      continue;
-    }
-    const page = pdf.addPage([595.28, 841.89]);
-    page.drawText(pdfText(entry.heading).slice(0, 90), {
-      x: 48,
-      y: 800,
-      size: 14,
-      font: bold,
-      color: rgb(0.1, 0.12, 0.16),
-    });
-    page.drawText(pdfText(entry.detail).slice(0, 110), {
-      x: 48,
-      y: 778,
-      size: 10,
-      font,
-      color: rgb(0.2, 0.24, 0.3),
-    });
-    const isJpeg = bytes[0] === 0xff && bytes[1] === 0xd8;
-    const isPng =
-      bytes.length >= 8 &&
-      bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
-    if (!isJpeg && !isPng) {
-      page.drawText("This file is stored with the contract record.", {
-        x: 48,
-        y: 740,
-        size: 11,
-        font,
-        color: rgb(0.1, 0.12, 0.16),
-      });
-      continue;
-    }
-    const image = isJpeg ? await pdf.embedJpg(bytes) : await pdf.embedPng(bytes);
-    const scale = Math.min(500 / image.width, 700 / image.height, 1);
-    const width = image.width * scale;
-    const height = image.height * scale;
-    page.drawImage(image, { x: 48, y: 750 - height, width, height });
-  }
-}
-
 export async function finalizeEnvelope(envelopeId) {
   const envelope = db.prepare("SELECT * FROM envelopes WHERE id = ?").get(envelopeId);
   const entity = db.prepare("SELECT * FROM entities WHERE id = ?").get(envelope.entity_id);
@@ -740,7 +590,7 @@ export async function finalizeEnvelope(envelopeId) {
   }
 
   const signedPdf = await PDFDocument.load(Buffer.from(await pdf.save()));
-  await appendBoundAttachments(signedPdf, listSigningAttachments(envelopeId));
+  await appendBoundAttachments(signedPdf, envelope, listSigningAttachments(envelopeId));
 
   const completedBytes = Buffer.from(await signedPdf.save());
   const completedFile = writeBytes(

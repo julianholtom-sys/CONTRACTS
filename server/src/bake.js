@@ -310,16 +310,38 @@ export async function bakeEnvelope(envelopeId, { actor = "system" } = {}) {
     }
 
     const contractDoc = await PDFDocument.load(readBytes(version.storage_ref));
-    const contractStartIndex = bakedDoc.getPageCount();
     const contractPages = await bakedDoc.copyPages(
       contractDoc,
       contractDoc.getPageIndices()
     );
-    contractPages.forEach((p) => bakedDoc.addPage(p));
-    const contractPageOffset = contractStartIndex;
+    // People read the contract and its schedules, then sign: the contract's pages with
+    // signature fields come after the schedules, just before the back cover.
+    const signingPages = new Set(
+      fields.filter((f) => f.field_type === "signature").map((f) => Number(f.page || 0))
+    );
+    const masterPageMap = [];
+    const placeContractPages = (wanted) =>
+      contractPages.forEach((page, index) => {
+        if (!wanted(index)) return;
+        masterPageMap[index] = bakedDoc.getPageCount();
+        bakedDoc.addPage(page);
+      });
+    placeContractPages((index) => !signingPages.has(index));
+
+    const appendixStarts = [];
+    for (const appendix of brand.appendices) {
+      const appendixDoc = await PDFDocument.load(readBytes(appendix.storage_ref));
+      const pageIndex = bakedDoc.getPageCount();
+      const pages = await bakedDoc.copyPages(appendixDoc, appendixDoc.getPageIndices());
+      pages.forEach((p) => bakedDoc.addPage(p));
+      appendixStarts.push({ id: appendix.id, pageIndex });
+    }
+
+    placeContractPages((index) => signingPages.has(index));
+    const contractPageOffset = masterPageMap[0];
 
     // Stamp legal footer + prepared/issued metadata + logo on first contract page
-    const firstContract = bakedDoc.getPages()[contractStartIndex];
+    const firstContract = bakedDoc.getPages()[contractPageOffset];
     if (firstContract) {
       firstContract.drawText(
         `${entity.legal_name} · ${entity.company_number} · ${entity.registered_office}`,
@@ -347,15 +369,6 @@ export async function bakeEnvelope(envelopeId, { actor = "system" } = {}) {
           /* logo optional */
         }
       }
-    }
-
-    const appendixStarts = [];
-    for (const appendix of brand.appendices) {
-      const appendixDoc = await PDFDocument.load(readBytes(appendix.storage_ref));
-      const pageIndex = bakedDoc.getPageCount();
-      const pages = await bakedDoc.copyPages(appendixDoc, appendixDoc.getPageIndices());
-      pages.forEach((p) => bakedDoc.addPage(p));
-      appendixStarts.push({ id: appendix.id, pageIndex });
     }
 
     if (brand.back) {
@@ -387,6 +400,7 @@ export async function bakeEnvelope(envelopeId, { actor = "system" } = {}) {
 
     snapshotEnvelopeFields(envelopeId, {
       contractPageOffset,
+      masterPageMap,
       appendixStarts,
     });
     prefillPartyFields(envelopeId);
@@ -410,7 +424,7 @@ export async function bakeEnvelope(envelopeId, { actor = "system" } = {}) {
     const previewDoc = await PDFDocument.load(cleanBytes);
     const previewFont = await previewDoc.embedFont(StandardFonts.Helvetica);
     const previewPages = previewDoc.getPages();
-    if (previewPages[contractStartIndex]) stampContractDates(previewPages[contractStartIndex], previewFont, envelope);
+    if (previewPages[contractPageOffset]) stampContractDates(previewPages[contractPageOffset], previewFont, envelope);
     const partyRoles = new Set(parties.map((party) => party.role_id));
     for (const field of placedFields.filter((f) => partyRoles.has(f.role_id))) {
       const page = previewPages[Math.min(Number(field.page || 0), previewPages.length - 1)];

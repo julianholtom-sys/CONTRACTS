@@ -172,7 +172,7 @@ export function listAppendixFields(appendixId) {
     .all(appendixId);
 }
 
-export function snapshotEnvelopeFields(envelopeId, { contractPageOffset, appendixStarts }) {
+export function snapshotEnvelopeFields(envelopeId, { contractPageOffset, masterPageMap = [], appendixStarts }) {
   db.prepare("DELETE FROM envelope_fields WHERE envelope_id = ?").run(envelopeId);
   const envelope = db.prepare("SELECT * FROM envelopes WHERE id = ?").get(envelopeId);
   const templateId =
@@ -206,7 +206,7 @@ export function snapshotEnvelopeFields(envelopeId, { contractPageOffset, appendi
       field.label,
       field.field_type,
       field.required,
-      (contractPageOffset || 0) + (field.page || 0),
+      masterPageMap[field.page || 0] ?? (contractPageOffset || 0) + (field.page || 0),
       field.x,
       field.y,
       field.w,

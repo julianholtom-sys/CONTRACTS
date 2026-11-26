@@ -196,6 +196,11 @@ Rules of the road:
     - **Signed copy said “Issued on send”**: the dates line is now added when the contract is signed (“Prepared dd/mm/yyyy · Issued dd/mm/yyyy”); the preview still says “Issued on send”. A contract baked before the clean copy existed is baked again on send.
     - **Placeholder showed a supplier box on a 3-way**: the preview only draws boxes for parties on the contract.
     - Still open, placeholder only: once the captions are gone the placeholder’s signature page does not name the parties, and its own footer sits under the dates line. Real broker contracts name each party beside its signature; check the footer area when they are uploaded.
+43. **Signature page last; bound documents styled (user decisions 2026-11-26).**
+    - **Signature page:** people read, then sign. Bake puts the contract’s pages that carry signature fields after the contract terms and the schedules, directly before the back cover (`masterPageMap` in `bake.js`, passed to `snapshotEnvelopeFields`). The order is now front cover, terms, schedules, signature page, back cover, signed pack, bound documents. The broker’s signature on the pack is the only one elsewhere. The prepared/issued dates, legal footer and logo stay on the contract’s first page.
+    - **Bound documents** (`server/src/boundDocuments.js`): styled like the pack’s annexes. An index page (“Documents provided at signing”, the contract reference, a table of documents, parties and pages), then each document captioned (“Document 2: Supplier (SPV), Director ID (David King)”) and framed under the broker’s header, with page numbers and “Documents provided at signing, Contract reference CT-…” on every page. They used to be a plain heading page and the raw file.
+    - **Field detection:** a line naming no party, such as the heading “Signed by the parties”, used to give every party an extra signature box at the heading, so signatures were drawn twice. It now only stands in for a party that has no signature box of its own.
+    - The TEST contracts in the harness now have two pages of terms and a signature page. Full test: 162 of 162 checks passed, including the signature page sitting just before the back cover after the terms and schedules, one signature box per party, and the bound documents’ frame, index and captions. Copies of the four signed contracts are in the user’s Downloads (`Contract Builder test 26-11-2026`).
 
 ## Active git / PR notes
 
@@ -227,7 +232,8 @@ Rules of the road:
 - [x] Make `npm start` work on Windows (item 40).
 - [x] 3-way contract tested end to end, from creation to the client’s signature (item 40).
 - [x] Full test of 3-way and 4-way for both brokers with a fake client: 152 of 152 checks passed (item 42).
-- [ ] When the real contracts are uploaded, check the stamped legal footer and dates line at the foot of the first contract page do not overlap the broker’s own footer.
+- [ ] When the real contracts are uploaded, check the stamped logo (top right) and the legal footer and dates line (bottom left) on the first contract page do not overlap the broker’s own header and footer, and that detection puts one signature box per party on the signature page.
+- [x] Signature page placed after the terms and schedules, before the back cover; bound documents styled like the pack (item 43).
 - [x] Due diligence declarations and director’s certificate — signed by the broker’s director in the pack; the signed pack is added to the contract at issue.
 - [x] Union Payroll broker library record: no longer a sample, name spacing fixed.
 - [x] Client company number: Companies House details fill the client’s contract fields (no documents fetched).

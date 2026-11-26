@@ -26,6 +26,7 @@ import {
   addBrandedCover,
   addPlainCover,
   brokerLegalName,
+  drawCaption,
   drawFrame,
   normalCase,
   packText,
@@ -851,16 +852,6 @@ function addSectionDivider(writer, section, annexNo) {
   if (record.companyNumber) line(`Company number ${record.companyNumber}`, 10, font, theme.muted, 6);
   page.drawRectangle({ x: MARGIN, y: y - 4, width: 80, height: 3, color: theme.accent });
   writer.y = y - 30;
-}
-
-function drawCaption(page, { font, bold, theme }, caption, continued = false) {
-  if (continued) {
-    const line = wrapText(`${caption} (continued)`, font, 8, CONTENT_W)[0];
-    page.drawText(line, { x: MARGIN, y: BODY_TOP - 9, size: 8, font, color: theme.muted });
-    return;
-  }
-  const line = wrapText(caption, bold, 9.5, CONTENT_W)[0];
-  page.drawText(line, { x: MARGIN, y: BODY_TOP - 10, size: 9.5, font: bold, color: theme.ink });
 }
 
 async function addAnnexPages(out, writer, item, caption, fonts) {

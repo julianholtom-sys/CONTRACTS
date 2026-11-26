@@ -316,7 +316,11 @@ function expandUnassigned(fields, _kind) {
   const extras = [];
   for (const field of unassigned) {
     if (!["signature", "checkbox", "initials"].includes(field.field_type)) continue;
+    // A line naming no party ("Signed by the parties") only stands in for parties without one of their own.
+    const covered = (role) =>
+      [...assigned, ...extras].some((f) => f.role_key === role && f.field_type === field.field_type);
     CORE_ROLES.forEach((role, index) => {
+      if (covered(role)) return;
       extras.push({
         ...field,
         role_key: role,
