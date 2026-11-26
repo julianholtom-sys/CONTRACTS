@@ -10,7 +10,6 @@ export default function EnvelopeDetail() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
   const [links, setLinks] = useState({});
-  const [nameDraft, setNameDraft] = useState({});
   const [checks, setChecks] = useState({});
   const [pepDraft, setPepDraft] = useState({});
   const [signingDates, setSigningDates] = useState({});
@@ -95,28 +94,18 @@ export default function EnvelopeDetail() {
   const changedDocs = (diligence?.documents || []).filter(
     (doc) => !sameDates(checks[doc.key], savedDates.current[doc.key])
   );
-  const draftNames = Object.entries(nameDraft).filter(
-    ([, draft]) => draft.previousName.trim() || draft.newName.trim()
-  );
   const draftPep = (diligence?.pep || []).filter((person) => {
     const draft = pepDraft[`${person.roleKey}:${person.personKey}`];
     return !person.approvedOn && draft && draft !== person.result;
   });
-  const unsaved = !ddLocked && Boolean(changedDocs.length || draftNames.length || draftPep.length);
+  const unsaved = !ddLocked && Boolean(changedDocs.length || draftPep.length);
 
   async function saveProgress() {
-    if (draftNames.some(([, draft]) => !draft.previousName.trim() || !draft.newName.trim())) {
-      throw new Error("Enter both the previous name and the new name, or clear them");
-    }
     if (changedDocs.length) {
       await api.saveDueDiligenceChecks(
         id,
         changedDocs.map((doc) => ({ key: doc.key, ...checks[doc.key] }))
       );
-    }
-    for (const [roleKey, draft] of draftNames) {
-      await api.addNameChange(id, { roleKey, previousName: draft.previousName, newName: draft.newName });
-      setNameDraft((prev) => ({ ...prev, [roleKey]: { previousName: "", newName: "" } }));
     }
     for (const person of draftPep) {
       await api.savePepCheck(id, {
@@ -398,161 +387,6 @@ export default function EnvelopeDetail() {
               })}
             </div>
           ) : null}
-          {diligence.sections.filter((section) => !section.heldOnRecord).map((section) => {
-            const draft = nameDraft[section.roleKey] || { previousName: "", newName: "" };
-            return (
-              <div className="party-card" key={section.roleKey} style={{ marginTop: "1rem" }}>
-                <h3>
-                  {section.label}
-                  {section.companyName ? ` · ${section.companyName}` : ""}{" "}
-                  <span className={`badge ${section.submittedAt ? "completed" : "draft"}`}>
-                    {section.submittedAt ? "submitted" : "not submitted"}
-                  </span>
-                </h3>
-                {section.roleKey === "company" ? (
-                  <p className="muted">Add a certificate for each name change, if any.</p>
-                ) : null}
-                {section.roleKey === "supplier" ? (
-                  <label className="consent">
-                    <input
-                      type="checkbox"
-                      checked={Boolean(section.officeChanged)}
-                      onChange={(e) =>
-                        run("office", () => api.setOfficeChanged(id, e.target.checked))
-                      }
-                    />
-                    <span>Registered office has changed</span>
-                  </label>
-                ) : null}
-                <div className="form-grid">
-                  {section.items
-                    .filter((item) => item.required || item.key === "registered_office")
-                    .map((item) => (
-                      <div key={item.key}>
-                        <strong>
-                          {item.label}{" "}
-                          {item.required ? (
-                            <span className={`badge ${item.satisfied ? "completed" : "sent"}`}>
-                              {item.satisfied ? "in pack" : "needed"}
-                            </span>
-                          ) : (
-                            <span className="muted">not requested</span>
-                          )}
-                        </strong>
-                        {item.file ? <p className="meta">{item.file.original_name}</p> : null}
-                        {item.required || section.officeChanged ? (
-                          <label className="muted">
-                            Upload
-                            <input
-                              type="file"
-                              accept=".pdf,.png,.jpg,.jpeg"
-                              onChange={(e) => {
-                                const file = e.target.files?.[0];
-                                e.target.value = "";
-                                if (!file) return;
-                                run(`file-${section.roleKey}-${item.key}`, () =>
-                                  api.uploadDueDiligence(id, {
-                                    roleKey: section.roleKey,
-                                    requirementKey: item.key,
-                                    file,
-                                  })
-                                );
-                              }}
-                            />
-                          </label>
-                        ) : null}
-                      </div>
-                    ))}
-                </div>
-                {section.nameChanges.map((change) => (
-                  <div key={change.id} style={{ marginTop: "0.75rem" }}>
-                    <strong>
-                      {change.label}{" "}
-                      <span className={`badge ${change.satisfied ? "completed" : "sent"}`}>
-                        {change.satisfied ? "in pack" : "needed"}
-                      </span>
-                    </strong>
-                    {change.file ? <p className="meta">{change.file.original_name}</p> : null}
-                    <div className="toolbar">
-                      <label className="muted">
-                        Upload certificate and resolution
-                        <input
-                          type="file"
-                          accept=".pdf,.png,.jpg,.jpeg"
-                          onChange={(e) => {
-                            const file = e.target.files?.[0];
-                            e.target.value = "";
-                            if (!file) return;
-                            run(`change-${change.id}`, () =>
-                              api.uploadDueDiligence(id, {
-                                roleKey: section.roleKey,
-                                nameChangeId: change.id,
-                                file,
-                              })
-                            );
-                          }}
-                        />
-                      </label>
-                      <button
-                        type="button"
-                        className="btn secondary"
-                        onClick={() => run(`drop-${change.id}`, () => api.removeNameChange(id, change.id))}
-                      >
-                        Remove change
-                      </button>
-                    </div>
-                  </div>
-                ))}
-                <div className="signer-row" style={{ marginTop: "0.75rem" }}>
-                  <label>
-                    Previous name
-                    <input
-                      value={draft.previousName}
-                      placeholder="Name before the change"
-                      onChange={(e) =>
-                        setNameDraft((prev) => ({
-                          ...prev,
-                          [section.roleKey]: { ...draft, previousName: e.target.value },
-                        }))
-                      }
-                    />
-                  </label>
-                  <label>
-                    New name
-                    <input
-                      value={draft.newName}
-                      placeholder="Name after the change"
-                      onChange={(e) =>
-                        setNameDraft((prev) => ({
-                          ...prev,
-                          [section.roleKey]: { ...draft, newName: e.target.value },
-                        }))
-                      }
-                    />
-                  </label>
-                  <button
-                    type="button"
-                    className="btn secondary"
-                    onClick={() =>
-                      run(`add-${section.roleKey}`, async () => {
-                        await api.addNameChange(id, {
-                          roleKey: section.roleKey,
-                          previousName: draft.previousName,
-                          newName: draft.newName,
-                        });
-                        setNameDraft((prev) => ({
-                          ...prev,
-                          [section.roleKey]: { previousName: "", newName: "" },
-                        }));
-                      })
-                    }
-                  >
-                    Add name change
-                  </button>
-                </div>
-              </div>
-            );
-          })}
           <div className="party-card" style={{ marginTop: "1rem" }}>
             <h3>Review</h3>
             <label>

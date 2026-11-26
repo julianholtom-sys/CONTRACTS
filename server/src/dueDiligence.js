@@ -102,7 +102,6 @@ function officeChanged(envelopeId, roleKey) {
 function sectionRoles(envelope) {
   const roles = ["supplier"];
   if (envelope.party_shape === "four") roles.push("spv");
-  roles.push("company");
   return roles;
 }
 
@@ -309,7 +308,7 @@ export function addNameChange(envelopeId, { roleKey, previousName, newName, part
   const envelope = db.prepare("SELECT * FROM envelopes WHERE id = ?").get(envelopeId);
   assertDdEditable(envelope);
   if (!sectionRoles(envelope).includes(roleKey)) {
-    throw new Error("Name changes are recorded for the contractor, supplier and client");
+    throw new Error("Name changes are recorded for the contractor and supplier");
   }
   const previous = String(previousName || "").trim();
   const next = String(newName || "").trim();
