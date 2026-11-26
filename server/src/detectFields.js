@@ -65,6 +65,8 @@ function inferTypeFromText(text) {
   if (/\b(print name|printed name|full name|name of signatory|signer's name)\b/i.test(t)) {
     return "text";
   }
+  if (/^name\s*:/i.test(t)) return "text";
+  if (/^guarantor director\b[^:]{0,40}:\s*$/i.test(t)) return "text";
   if (/\b(position|job title|capacity|title)\b/i.test(t) && !/\bcontract title\b/i.test(t)) {
     return "text";
   }
@@ -77,12 +79,14 @@ function inferTypeFromText(text) {
 
 function inferRoleFromText(text) {
   const t = String(text || "");
-  if (/\b(sub-?contractor|contractor)\b/i.test(t)) return "supplier";
-  if (/\b(supplier|spv)\b/i.test(t)) return "spv";
-  if (/\b(broker|agency|recruitment)\b/i.test(t)) return "agency";
-  if (/\b(client|hirer|employer)\b/i.test(t)) return "company";
-  if (/\bthe company\b/i.test(t) && !/\bcompany name\b/i.test(t)) return "company";
-  return null;
+  const roles = new Set();
+  if (/\b(sub-?contractor|contractor)\b/i.test(t)) roles.add("supplier");
+  if (/\b(supplier|spv)\b/i.test(t)) roles.add("spv");
+  if (/\b(broker|agency|recruitment)\b/i.test(t)) roles.add("agency");
+  if (/\b(client|hirer|employer)\b/i.test(t)) roles.add("company");
+  if (/\bthe company\b/i.test(t) && !/\bcompany name\b/i.test(t)) roles.add("company");
+  // A line naming two parties ("the Contractor-Broker agreement") is neither party's own.
+  return roles.size === 1 ? [...roles][0] : null;
 }
 
 function headingRole(text) {
@@ -273,11 +277,33 @@ function emptyLabel(line) {
   return { end: line.items[index].x + line.items[index].w, next: rest[0] || null };
 }
 
-/** A sentence from the body of the contract rather than a line of a form. */
-function isProse(text) {
-  if (BLANK_RE.test(text)) return false;
-  const words = text.split(/\s+/).filter(Boolean).length;
-  return /[.;,]$/.test(text) || (words > 10 && !/:$/.test(text));
+/** A line of a form (a blank, a label, a short caption) rather than a sentence from the contract. */
+function isFormLine(text) {
+  if (BLANK_RE.test(text)) return true;
+  if (/:\s*$/.test(text)) return true;
+  const label = text.match(/^([^:]{1,40}):/);
+  if (label && label[1].split(/\s+/).filter(Boolean).length <= 5) return true;
+  return text.split(/\s+/).filter(Boolean).length <= 4 && !/[.;,]$/.test(text);
+}
+
+/** Where a second column starts: an x, right of the margin, at which many lines begin after clear space. */
+function columnSplit(page) {
+  const starts = new Map();
+  for (const item of page.items) {
+    if (item.x < page.width * 0.35 || item.x > page.width * 0.7) continue;
+    const crowded = page.items.some(
+      (other) => other !== item && Math.abs(other.y - item.y) <= 4 && other.x < item.x && other.x + other.w > item.x - 12
+    );
+    if (crowded) continue;
+    const key = Math.round(item.x / 4);
+    starts.set(key, (starts.get(key) || 0) + 1);
+  }
+  let best = null;
+  for (const [key, count] of starts) {
+    const total = count + (starts.get(key - 1) || 0) + (starts.get(key + 1) || 0);
+    if (total >= 6 && (!best || total > best.total)) best = { x: key * 4 - 6, total };
+  }
+  return best ? best.x : null;
 }
 
 /** Party words before the blank (or in a party definition) say whose line it is; words after it describe the content. */
@@ -288,25 +314,23 @@ function roleText(text) {
   return [text.slice(0, blank), ...definitions].join(" ");
 }
 
-function boxForLine(line, type, pageWidth, pageHeight, { gapAbove = null, column = null } = {}) {
+function boxForLine(line, type, pageWidth, pageHeight, { gapAbove = null, column = null, right = null } = {}) {
   const size = SIZES[type] || SIZES.text;
+  const edge = right ?? pageWidth - 48;
   // Form lines are often set close together; a box stays below the line above.
   const h = gapAbove == null ? size.h : Math.max(12, Math.min(size.h, gapAbove + 4));
   const run = blankRun(line);
   if (run) {
-    return clampBox(
-      { x: run.start, y: line.y - 4, w: Math.max(run.end - run.start, size.w * 0.6), h },
-      pageWidth,
-      pageHeight
-    );
+    const w = Math.max(run.end - run.start, Math.min(size.w * 0.6, edge - run.start));
+    return clampBox({ x: run.start, y: line.y - 4, w, h }, pageWidth, pageHeight);
   }
   const label = column == null ? null : emptyLabel(line);
   if (label) {
     const x = Math.max(column, label.end + 6);
-    const limit = label.next ? label.next.x - 6 : pageWidth - 48;
+    const limit = label.next ? label.next.x - 6 : edge;
     return clampBox({ x, y: line.y - 4, w: Math.max(40, limit - x), h }, pageWidth, pageHeight);
   }
-  const rightSpace = pageWidth - line.endX - 20;
+  const rightSpace = (right == null ? pageWidth - 20 : right - 10) - line.endX;
   if (rightSpace >= size.w * 0.6) {
     return clampBox(
       {
@@ -335,62 +359,78 @@ function detectFromTextPages(pages) {
   const out = [];
   let currentRole = null;
   for (const page of pages) {
-    const lines = itemsToLines(page);
-    const typeOf = (index) => {
-      const line = lines[index];
-      const next = lines[index + 1];
-      let type = inferTypeFromText(line.text);
-      if (!type && next && /^[_.=]{5,}$/.test(next.text.replace(/\s/g, ""))) type = "text";
-      if (!type) return null;
-      if (line.text.length > 90 && type !== "checkbox") return null;
-      if (type !== "checkbox" && isProse(line.text)) return null;
-      return type;
-    };
-    const types = lines.map((_, index) => typeOf(index));
-    // Values for a block of labels ("Company Name:", "Company Address:") line up after the longest label.
-    const columns = new Map();
-    lines.forEach((line, index) => {
-      const label = types[index] && emptyLabel(line);
-      if (!label) return;
-      const key = Math.round(line.x / 4);
-      columns.set(key, Math.max(columns.get(key) || 0, label.end + 8));
-    });
-    let block = null;
-    for (let i = 0; i < lines.length; i += 1) {
-      const line = lines[i];
-      const heading = headingRole(line.text);
-      if (heading) {
-        currentRole = heading;
-        block = null;
-        continue;
+    // A two-column page (execution blocks side by side) is read down the left column, then the right.
+    const split = columnSplit(page);
+    const parts =
+      split == null
+        ? [{ items: page.items, right: null }]
+        : [
+            { items: page.items.filter((item) => item.x < split), right: split - 8 },
+            { items: page.items.filter((item) => item.x >= split), right: null },
+          ];
+    for (const part of parts) {
+      const lines = itemsToLines({ ...page, items: part.items });
+      const typeOf = (index) => {
+        const line = lines[index];
+        const next = lines[index + 1];
+        let type = inferTypeFromText(line.text);
+        if (!type && next && /^[_.=]{5,}$/.test(next.text.replace(/\s/g, ""))) type = "text";
+        if (!type) return null;
+        if (line.text.length > 90 && type !== "checkbox") return null;
+        if (type !== "checkbox" && !isFormLine(line.text)) return null;
+        return type;
+      };
+      const types = lines.map((_, index) => typeOf(index));
+      // Values for a block of labels ("Company Name:", "Company Address:") line up after the longest label;
+      // a much longer label ("Guarantor Director of the Contractor:") gets its own box instead.
+      const ends = new Map();
+      lines.forEach((line, index) => {
+        const label = types[index] && emptyLabel(line);
+        if (!label) return;
+        const key = Math.round(line.x / 4);
+        ends.set(key, [...(ends.get(key) || []), label.end]);
+      });
+      const columns = new Map(
+        [...ends].map(([key, list]) => [key, Math.max(...list.filter((end) => end <= Math.min(...list) + 60)) + 8])
+      );
+      let block = null;
+      for (let i = 0; i < lines.length; i += 1) {
+        const line = lines[i];
+        const heading = headingRole(line.text);
+        if (heading) {
+          currentRole = heading;
+          block = null;
+          continue;
+        }
+        const type = types[i];
+        if (!type) continue;
+        const isLabel = /^[^:]{1,40}:/.test(line.text);
+        let roleKey = inferRoleFromText(roleText(line.text));
+        // "Company Address:" under "Company Name: … (the "Client")" belongs to the same party.
+        if (!roleKey && isLabel && block && block.page === page.pageIndex && block.y - line.y <= 40) roleKey = block.role;
+        roleKey = roleKey || currentRole || null;
+        if (!isLabel) block = null;
+        else if (roleKey) block = { page: page.pageIndex, y: line.y, role: roleKey };
+        const box = boxForLine(line, type, page.width, page.height, {
+          gapAbove: i > 0 ? lines[i - 1].y - line.y : null,
+          column: columns.get(Math.round(line.x / 4)) ?? null,
+          right: part.right,
+        });
+        out.push({
+          role_key: roleKey,
+          field_key: `${roleKey || "party"}_${type}_p${page.pageIndex}_${out.length}`,
+          label: fieldLabel(roleKey, type, line.text),
+          field_type: type,
+          page: page.pageIndex,
+          ...box,
+          source: "text",
+          // "Signed for and on behalf of the Client by …:" introduces a block that may hold its own "Signature" line.
+          weak:
+            type === "signature" &&
+            !BLANK_RE.test(line.text) &&
+            !/\b(signature|sign here|sign below)\b/i.test(line.text),
+        });
       }
-      const type = types[i];
-      if (!type) continue;
-      const isLabel = /^[^:]{1,40}:/.test(line.text);
-      let roleKey = inferRoleFromText(roleText(line.text));
-      // "Company Address:" under "Company Name: … (the "Client")" belongs to the same party.
-      if (!roleKey && isLabel && block && block.page === page.pageIndex && block.y - line.y <= 30) roleKey = block.role;
-      roleKey = roleKey || currentRole || null;
-      if (!isLabel) block = null;
-      else if (roleKey) block = { page: page.pageIndex, y: line.y, role: roleKey };
-      const box = boxForLine(line, type, page.width, page.height, {
-        gapAbove: i > 0 ? lines[i - 1].y - line.y : null,
-        column: columns.get(Math.round(line.x / 4)) ?? null,
-      });
-      out.push({
-        role_key: roleKey,
-        field_key: `${roleKey || "party"}_${type}_p${page.pageIndex}_${out.length}`,
-        label: fieldLabel(roleKey, type, line.text),
-        field_type: type,
-        page: page.pageIndex,
-        ...box,
-        source: "text",
-        // "Signed for and on behalf of the Client by …:" introduces a block that may hold its own "Signature" line.
-        weak:
-          type === "signature" &&
-          !BLANK_RE.test(line.text) &&
-          !/\b(signature|sign here|sign below)\b/i.test(line.text),
-      });
     }
   }
   const strong = (field) =>

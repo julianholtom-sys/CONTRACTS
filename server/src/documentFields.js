@@ -256,7 +256,7 @@ function detailKeyFor(label) {
   if (/company (number|no)|registration number|registered number/.test(text)) return "company_number";
   if (/registered office|registered address|\baddress\b/.test(text)) return "registered_office";
   if (/company name|registered name|trading name/.test(text)) return "company_name";
-  if (/print name|printed name|full name|name of signatory|signer'?s name|^name:?$/.test(text)) return "signer_name";
+  if (/print name|printed name|full name|name of signatory|signer'?s name|^name:?$|^guarantor director\b/.test(text)) return "signer_name";
   if (/position|job title|capacity|\btitle\b/.test(text)) return "signer_role";
   return null;
 }
