@@ -467,7 +467,7 @@ export default function EnvelopeDetail() {
               const people = (diligence.pep || []).filter((row) => row.roleKey === record.roleKey);
               if (!people.length) return null;
               return (
-                <div key={record.roleKey} style={{ marginTop: "0.5rem" }}>
+                <div key={record.roleKey} style={{ marginTop: "0.75rem" }}>
                   <strong>
                     {record.label} · {record.companyName}
                   </strong>
@@ -475,8 +475,8 @@ export default function EnvelopeDetail() {
                     const draftKey = `${person.roleKey}:${person.personKey}`;
                     const draftResult = pepDraft[draftKey] || person.result || "clear";
                     return (
-                      <div key={draftKey} className="toolbar" style={{ marginTop: "0.4rem", alignItems: "center" }}>
-                        <span>
+                      <div key={draftKey} className="pep-row">
+                        <span className="pep-name">
                           {person.name} <span className="muted">({person.roles.join(" and ")})</span>
                         </span>
                         {person.verified == null ? (

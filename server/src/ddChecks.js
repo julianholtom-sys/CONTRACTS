@@ -121,7 +121,7 @@ export function insuranceChecks(record, packDay) {
     if (policy.expiresOn) {
       const days = daysBetween(packDay, policy.expiresOn);
       if (days < 0) reasons.push("expired");
-      else if (days <= 30) reasons.push("expires within 30 days");
+      else if (policy.key === "el" && days <= 30) reasons.push("expires within 30 days");
     }
     const complete = policy.insurer && policy.policyNumber && policy.cover != null && policy.expiresOn;
     const details = complete
