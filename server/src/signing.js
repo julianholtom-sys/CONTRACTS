@@ -232,18 +232,18 @@ function attachDirectorId(envelopeId, party, file) {
 }
 
 /**
- * The broker, contractor and supplier sign with the signature saved on their
- * record, dated the day the contract is issued. Only the client signs by link.
+ * The contractor, the supplier (4-way) and the broker sign in that order with the
+ * signature saved on their record, dated the day the contract is issued. Only the
+ * client signs by link, last.
  */
 export function applySavedSignatures(envelopeId, { actor = "staff" } = {}) {
   const gaps = savedSignatureGaps(envelopeId);
   if (gaps.length) throw new Error(gapMessage(gaps));
   const envelope = db.prepare("SELECT * FROM envelopes WHERE id = ?").get(envelopeId);
-  const signedAt = now();
   const signedOn = localDay();
   db.exec("BEGIN");
   try {
-    signWithSavedSignatures(envelope, signedAt, signedOn, actor);
+    signWithSavedSignatures(envelope, signedOn, actor);
     db.exec("COMMIT");
   } catch (err) {
     db.exec("ROLLBACK");
@@ -251,10 +251,13 @@ export function applySavedSignatures(envelopeId, { actor = "staff" } = {}) {
   }
 }
 
-function signWithSavedSignatures(envelope, signedAt, signedOn, actor) {
+function signWithSavedSignatures(envelope, signedOn, actor) {
   const envelopeId = envelope.id;
+  let previous = 0;
   for (const party of partiesSigningInApp(envelopeId)) {
     if (party.status === "completed") continue;
+    previous = Math.max(Date.now(), previous + 1);
+    const signedAt = new Date(previous).toISOString();
     const record = recordForEnvelopeParty(envelope, party);
     const sigFile = writeBytes("signatures", `${party.id}-${Date.now()}.png`, readBytes(record.signature_ref));
     attachDirectorId(envelopeId, party, directorIdFile(record.id));

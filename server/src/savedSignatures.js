@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { db, now } from "./db.js";
-import { FINAL_EVIDENCE, PARTY_LABELS, SIGNS_BY_LINK } from "./parties.js";
+import { FINAL_EVIDENCE, PARTY_LABELS, SIGN_ORDER, SIGNS_BY_LINK } from "./parties.js";
 import { readSignatureInput } from "./signatureInput.js";
 import { absolutePath, exists, readBytes, writeBase64Png } from "./storage.js";
 
@@ -37,7 +37,7 @@ function removeStored(storageRef) {
   }
 }
 
-/** Typed in a handwriting font or an uploaded image, kept on the broker, contractor or supplier record. */
+/** Typed in a handwriting font or an uploaded image, kept on the contractor, supplier or broker record. */
 export function savePartySignature(partyId, input = {}) {
   const row = recordRow(partyId);
   if (!row || !SAVED_SIGNATURE_KINDS.has(row.kind)) throw new Error("Company record not found");
@@ -104,7 +104,7 @@ export function recordForEnvelopeParty(envelope, party) {
   );
 }
 
-/** Every party except the client, in signing order. */
+/** Every party except the client, in sign order: Contractor, Supplier (4-way), Broker. */
 export function partiesSigningInApp(envelopeId) {
   return db
     .prepare(
@@ -113,7 +113,8 @@ export function partiesSigningInApp(envelopeId) {
        WHERE p.envelope_id = ? AND r.role_key != ?
        ORDER BY p.order_index`
     )
-    .all(envelopeId, SIGNS_BY_LINK);
+    .all(envelopeId, SIGNS_BY_LINK)
+    .sort((a, b) => SIGN_ORDER.indexOf(a.role_key) - SIGN_ORDER.indexOf(b.role_key));
 }
 
 export function directorIdRequirement(party) {
@@ -134,7 +135,7 @@ export function directorIdFile(recordId) {
     .get(recordId);
 }
 
-/** What stops the broker, contractor and supplier signing with their saved signatures. */
+/** What stops the contractor, supplier and broker signing with their saved signatures, in sign order. */
 export function savedSignatureGaps(envelopeId) {
   const envelope = db.prepare("SELECT id, entity_id FROM envelopes WHERE id = ?").get(envelopeId);
   if (!envelope) return [];
