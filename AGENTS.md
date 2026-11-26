@@ -6,6 +6,7 @@ Update both when product decisions, architecture, or demo access change, then co
 ## Product intent
 
 - E-sign for **Union Payroll**. Almost every contract is 3-way (**Contractor**, **Broker**, **Client**). A 4-way adds **Supplier (SPV)**. API keys remain `supplier` / `agency` / `company`, plus `spv`. Sign order is Contractor, Supplier (4-way only), Broker, Client.
+- **Only the brokers are real so far** (Union Payroll, E Street Management, and their signatories). Every contractor, supplier and client record and every contract in the database is test data, including the live Companies House companies used for testing (MISSIONOPSAI LTD, ARC RISK MODELS LIMITED, DEVI MATA LTD). Never treat their signatories as real people: don't ask for their signatures or IDs or list them as to-dos.
 - Spec: `docs/esign-data-model.pdf` (Postgres/GCS in the brief → SQLite + local disk here).
 - The app header says **Contract Builder**. A contract is sent for a broker, and that broker’s cover is what the parties see on the document. Union Payroll (https://union-payroll.ltd/) is one broker. E Street Management (https://es.management/) is another. The header does not use a single broker’s logo. Accent `#0074FF`, Manrope, white-text primary buttons.
 

@@ -35,6 +35,7 @@ Broker setup is where company details, the front cover, the back cover, and the 
 
 ### Companies
 
+- **Real versus test (user, 2026-11-26):** only the brokers are real: Union Payroll (signatory Vitalijs Silovs) and E Street Management (signatory Rizwan Bin Imtiaz). Every contractor, supplier and client record, and every contract, is test data. MISSIONOPSAI LTD, ARC RISK MODELS LIMITED and DEVI MATA LTD are live Companies House companies used only for testing (test emails, placeholder documents, item 21); Contoso, Northwind and Bailey are samples. Their signatories are not people to collect signatures or IDs from, and they are not real to-dos.
 - Brokers: **Union Payroll** and, from 2026-11-26, **E Street Management** (local database only; demo companies Acme / Northwind / Contoso / Fabrikam / Adventure Works are retired / soft-deleted).
 - Legal profile for Union: **UNION WORK SERVICES LIMITED (trading as Union Payroll)**, company number **16734536**, registered office International House, 22-28 Wood Street, Doncaster, United Kingdom, DN1 3LW; contact `hello@union-payroll.ltd`.
 - Legal profile for E Street: **E Street Management Ltd**, company number **15936235**, registered office 10 Beaufort Court, Admirals Way, London, E14 9XL (from the user’s sample, matches Companies House); no VAT number on record.
@@ -174,7 +175,7 @@ Rules of the road:
     - **Send:** `startSigningInvites` checks `savedSignatureGaps`, then `applySavedSignatures` (one transaction) goes through the parties in sign order (Contractor, Supplier on a 4-way, Broker): it stamps each saved signature, fills the party’s date fields with the send date, records the signature row (no IP, as item 33) and marks the party signed. Each party’s signing time is later than the one before, so the record shows the order. The broker has already signed the due diligence pack by then (Send is blocked until it has). The client is then sent the invitation; it is the only email. The contract page lists what is missing under **Before sending** with links to the record, and the button reads **Send to the client**. Party cards say how each party signs; **Resend link** is shown for the client only, after sending, and the server refuses links for anyone else.
     - **Due diligence pack:** the broker’s signing page offers the saved signature, with **Use a different signature**.
     - Signed contract dates print as dd/mm/yyyy. The record is found from the contract’s link to it; for the broker, from the broker the contract is sent for.
-    - Tested on a copy of the database with mail switched off: the 4-way test contract was sent (three saved signatures and dates applied, both director IDs copied, one invitation to the client), then signed by the client, and the completed PDF carried all four signatures and the five bound documents. The real database has no saved signatures yet, so the test contract’s **Before sending** list shows what to add.
+    - Tested on a copy of the database with mail switched off: the 4-way test contract was sent (three saved signatures and dates applied, both director IDs copied, one invitation to the client), then signed by the client, and the completed PDF carried all four signatures and the five bound documents. Vitalijs Silovs’s signature for Union Payroll was saved from the user’s image on 26/11. The contractor and supplier lines still in the test contract’s **Before sending** list are test records; fill them with test values only when testing.
 
 ## Active git / PR notes
 
@@ -215,7 +216,8 @@ Rules of the road:
 - [x] E Street Management signatory: Rizwan Bin Imtiaz, Director, from Companies House (item 36).
 - [ ] E Street Management: add the broker to the live demo when it is next deployed (its database is separate).
 - [x] Saved signatures for the contractor, supplier and broker, applied in sign order; only the client signs by link, last (item 37).
-- [ ] Save the signature for each real signatory (Union Payroll’s and E Street’s directors, each contractor and supplier) and upload the contractor and supplier director IDs, from the records.
+- [x] Union Payroll: Vitalijs Silovs’s signature saved from the user’s image (26/11).
+- [ ] E Street Management: Rizwan Bin Imtiaz’s signature. (Contractor, supplier and client records are all test data so far; see Companies.)
 - [ ] Text boxes on a real master contract that the app cannot fill from the records stay blank for the contractor, supplier and broker, since they no longer open the signing page. Check this when the real master is uploaded.
 - [ ] Upload the real Union Payroll master contract to replace the placeholder (its text boxes will then be pre-filled from the party details).
 - [x] Staff dates on screen use UK format; PDFs use dd/mm/yyyy.
