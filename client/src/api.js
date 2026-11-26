@@ -80,6 +80,16 @@ export const api = {
     return request(`/api/parties/${id}/files`, { method: "POST", body });
   },
   partyFileUrl: (id, fileId) => `/api/parties/${id}/files/${fileId}`,
+  savePartySignature: (id, signature) =>
+    request(`/api/parties/${id}/signature`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        signatureDataUrl: signature.dataUrl,
+        method: signature.method,
+        typedName: signature.text || "",
+      }),
+    }),
   saveDueDiligenceChecks: (id, checks) =>
     request(`/api/envelopes/${id}/dd/checks`, {
       method: "POST",

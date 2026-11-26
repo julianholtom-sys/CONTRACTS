@@ -284,14 +284,18 @@ export default function CreateEnvelope() {
                 records={contractors}
                 showCompanyNumber
               />
-              <p className="muted">VAT, insurance, bank, payslip and payroll chain documents are on the contractor record.</p>
+              <p className="muted">
+                VAT, insurance, bank, payslip and payroll chain documents, the signature and the director ID are on the
+                contractor record.
+              </p>
             </section>
           ) : null}
           <section className="party-card">
             <h3>Client</h3>
             <PartyFields value={client} onChange={mergeParty(setClient)} records={clients} lookup />
             <p className="muted">
-              The client uploads its incorporation certificate, VAT certificate and director ID when signing.
+              The client is the only party sent a link. It uploads its incorporation certificate, VAT certificate and
+              director ID when signing.
             </p>
           </section>
           {shape === "four" ? (
@@ -304,7 +308,8 @@ export default function CreateEnvelope() {
                 showCompanyNumber
               />
               <p className="muted">
-                The PAYE letter and the Employers’ Liability documents are added on the supplier record.
+                The PAYE letter, the Employers’ Liability documents, the signature and the director ID are added on the
+                supplier record.
               </p>
             </section>
           ) : null}

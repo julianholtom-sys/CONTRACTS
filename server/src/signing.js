@@ -5,12 +5,24 @@ import { appendEvent } from "./events.js";
 import { sendTemplatedEmail } from "./mail.js";
 import { readBytes, writeBytes, writeBase64Png } from "./storage.js";
 import { envelopePlacedFields, fieldsForParty } from "./documentFields.js";
-import { FINAL_EVIDENCE } from "./parties.js";
+import { FINAL_EVIDENCE, SIGNS_BY_LINK } from "./parties.js";
 import { assertClientMayBeInvited, assertContractMayBeIssued } from "./dueDiligence.js";
+import { localDay } from "./ddChecks.js";
+import { ukDate } from "./coverStamp.js";
 import { SIGNATURE_MAX_HEIGHT } from "./signatureInput.js";
+import {
+  directorIdFile,
+  directorIdRequirement,
+  gapMessage,
+  partiesSigningInApp,
+  recordForEnvelopeParty,
+  savedSignatureGaps,
+} from "./savedSignatures.js";
 
 const CONSENT_TEXT =
   "I agree to sign this document electronically. I understand that my electronic signature is as legally binding as a handwritten signature.";
+const SAVED_SIGNATURE_TEXT =
+  "Signature saved on the company record and applied when the contract was issued.";
 
 export function hashToken(raw) {
   return createHash("sha256").update(raw).digest("hex");
@@ -123,9 +135,7 @@ export function inviteParty(envelopeId, partyId, { baseUrl, actor = "system" } =
 
   sendTemplatedEmail({
     entityId: entity.id,
-    templateType: envelope.status === "ready" && party.status === "pending"
-      ? "invitation"
-      : "turn_notification",
+    templateType: party.status === "pending" ? "invitation" : "resend",
     to: party.signer_email,
     envelopeId,
     partyId,
@@ -157,16 +167,143 @@ export function startSigningInvites(envelopeId, baseUrl, actor = "staff") {
     throw new Error("Envelope must be ready before inviting");
   }
   if (!envelope.baked_hash) throw new Error("Envelope is not baked");
+  const gaps = savedSignatureGaps(envelopeId);
+  if (gaps.length) throw new Error(gapMessage(gaps));
 
   const issuedAt = now();
   db.prepare(
     "UPDATE envelopes SET issued_at = COALESCE(issued_at, ?) WHERE id = ?"
   ).run(issuedAt, envelopeId);
+  applySavedSignatures(envelopeId, { actor });
 
-  const first = getActionableParty(envelopeId);
-  if (!first) throw new Error("No actionable party");
-  const result = inviteParty(envelopeId, first.id, { baseUrl, actor });
+  const client = getActionableParty(envelopeId);
+  if (!client) throw new Error("No actionable party");
+  const result = inviteParty(envelopeId, client.id, { baseUrl, actor });
   return { ...result, issuedAt };
+}
+
+function upsertFieldValue(envelopeId, fieldId, partyId, value, capturedAt) {
+  const valueHash = sha256(String(value));
+  const existing = db
+    .prepare("SELECT id FROM field_values WHERE envelope_id = ? AND field_id = ?")
+    .get(envelopeId, fieldId);
+  if (existing) {
+    db.prepare(
+      "UPDATE field_values SET value = ?, value_hash = ?, captured_at = ?, captured_ip = NULL, party_id = ? WHERE id = ?"
+    ).run(value, valueHash, capturedAt, partyId, existing.id);
+    return;
+  }
+  db.prepare(
+    `INSERT INTO field_values (id, envelope_id, field_id, party_id, value, value_hash, captured_at, captured_ip)
+     VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`
+  ).run(newId(), envelopeId, fieldId, partyId, value, valueHash, capturedAt);
+}
+
+/** The director ID on the company record, bound into the completed contract like a document uploaded at signing. */
+function attachDirectorId(envelopeId, party, file) {
+  const requirement = directorIdRequirement(party);
+  if (!requirement || !file) return;
+  const held = db
+    .prepare("SELECT id FROM evidence_files WHERE party_id = ? AND requirement_id = ? AND deleted_at IS NULL")
+    .get(party.id, requirement.id);
+  if (held) return;
+  const bytes = readBytes(file.storage_ref);
+  const stored = writeBytes("evidence", `${party.id}-director_id-${Date.now()}`, bytes);
+  const retention = new Date();
+  retention.setFullYear(retention.getFullYear() + 6);
+  db.prepare(
+    `INSERT INTO evidence_files (
+      id, party_id, envelope_id, requirement_id, review_status, original_name,
+      mime, size_bytes, storage_ref, file_hash, uploaded_at, uploaded_ip, retention_expires_at
+    ) VALUES (?, ?, ?, ?, 'uploaded', ?, ?, ?, ?, ?, ?, NULL, ?)`
+  ).run(
+    newId(),
+    party.id,
+    envelopeId,
+    requirement.id,
+    file.original_name || requirement.label,
+    file.mime,
+    bytes.length,
+    stored.storageRef,
+    stored.sha256,
+    now(),
+    retention.toISOString()
+  );
+}
+
+/**
+ * The broker, contractor and supplier sign with the signature saved on their
+ * record, dated the day the contract is issued. Only the client signs by link.
+ */
+export function applySavedSignatures(envelopeId, { actor = "staff" } = {}) {
+  const gaps = savedSignatureGaps(envelopeId);
+  if (gaps.length) throw new Error(gapMessage(gaps));
+  const envelope = db.prepare("SELECT * FROM envelopes WHERE id = ?").get(envelopeId);
+  const signedAt = now();
+  const signedOn = localDay();
+  db.exec("BEGIN");
+  try {
+    signWithSavedSignatures(envelope, signedAt, signedOn, actor);
+    db.exec("COMMIT");
+  } catch (err) {
+    db.exec("ROLLBACK");
+    throw err;
+  }
+}
+
+function signWithSavedSignatures(envelope, signedAt, signedOn, actor) {
+  const envelopeId = envelope.id;
+  for (const party of partiesSigningInApp(envelopeId)) {
+    if (party.status === "completed") continue;
+    const record = recordForEnvelopeParty(envelope, party);
+    const sigFile = writeBytes("signatures", `${party.id}-${Date.now()}.png`, readBytes(record.signature_ref));
+    attachDirectorId(envelopeId, party, directorIdFile(record.id));
+    for (const field of fieldsForParty(envelopeId, party.role_id)) {
+      if (field.field_type === "date") {
+        upsertFieldValue(envelopeId, field.id, party.id, signedOn, signedAt);
+      } else if (["signature", "initials"].includes(field.field_type)) {
+        const value = record.signature_method === "typed" ? record.signature_text || party.signer_name : sigFile.storageRef;
+        upsertFieldValue(envelopeId, field.id, party.id, value, signedAt);
+      }
+    }
+    const sigId = newId();
+    db.prepare(
+      `INSERT INTO signatures (
+        id, party_id, envelope_id, method, signature_asset_ref, document_hash,
+        consent_text, consent_given_at, signed_at, ip, user_agent
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '', 'Contract Builder')`
+    ).run(
+      sigId,
+      party.id,
+      envelopeId,
+      record.signature_method,
+      sigFile.storageRef,
+      envelope.baked_hash,
+      SAVED_SIGNATURE_TEXT,
+      signedAt,
+      signedAt
+    );
+    db.prepare(
+      "UPDATE envelope_parties SET status = 'completed', completed_at = ? WHERE id = ?"
+    ).run(signedAt, party.id);
+    appendEvent({
+      envelopeId,
+      partyId: party.id,
+      actor,
+      eventType: "signed",
+      metadata: { signature_id: sigId, document_hash: envelope.baked_hash, saved_signature: true },
+    });
+  }
+  db.prepare("UPDATE envelopes SET status = 'in_progress' WHERE id = ? AND status = 'ready'").run(envelopeId);
+}
+
+export function assertSignsByLink(partyId) {
+  const role = db
+    .prepare("SELECT r.role_key FROM envelope_parties p JOIN template_roles r ON r.id = p.role_id WHERE p.id = ?")
+    .get(partyId);
+  if (role?.role_key !== SIGNS_BY_LINK) {
+    throw new Error("Only the client signs by link. The others sign with their saved signature when the contract is sent.");
+  }
 }
 
 export async function applySignatureAndCompleteParty({
@@ -546,7 +683,7 @@ export async function finalizeEnvelope(envelopeId) {
     if (["signature", "initials", "attachment"].includes(v.field_type)) continue;
     const pageIndex = placed.length ? Number(v.page || 0) : pageOffset + (v.page || 0);
     const page = pages[Math.min(pageIndex, pages.length - 1)];
-    const text = String(v.value || "");
+    const text = v.field_type === "date" ? ukDate(v.value) : String(v.value || "");
     if (v.field_type === "checkbox") {
       if (text && text !== "0" && text.toLowerCase() !== "false") {
         page.drawText("X", {

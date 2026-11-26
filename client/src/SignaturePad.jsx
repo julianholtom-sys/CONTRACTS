@@ -95,9 +95,9 @@ function DrawPad({ onChange }) {
  * Draw, type in a handwriting font, or upload an image. Every route hands back a cropped PNG,
  * so the server and the PDF stamping treat them the same.
  */
-export default function SignaturePad({ onChange, defaultName = "" }) {
+export default function SignaturePad({ onChange, defaultName = "", modes = MODES.map(([id]) => id) }) {
   registerSignatureFonts();
-  const [mode, setMode] = useState("drawn");
+  const [mode, setMode] = useState(modes[0]);
   const [drawn, setDrawn] = useState(null);
   const [typedText, setTypedText] = useState(defaultName);
   const [fontIndex, setFontIndex] = useState(0);
@@ -148,7 +148,7 @@ export default function SignaturePad({ onChange, defaultName = "" }) {
   return (
     <div className="sig-input sig-stack">
       <div className="sig-tabs" role="tablist" aria-label="How to sign">
-        {MODES.map(([id, label]) => (
+        {MODES.filter(([id]) => modes.includes(id)).map(([id, label]) => (
           <button
             key={id}
             type="button"
@@ -162,9 +162,11 @@ export default function SignaturePad({ onChange, defaultName = "" }) {
         ))}
       </div>
 
-      <div hidden={mode !== "drawn"}>
-        <DrawPad onChange={setDrawn} />
-      </div>
+      {modes.includes("drawn") ? (
+        <div hidden={mode !== "drawn"}>
+          <DrawPad onChange={setDrawn} />
+        </div>
+      ) : null}
 
       <div hidden={mode !== "typed"} className="sig-stack">
         <label>

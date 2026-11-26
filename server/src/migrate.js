@@ -72,6 +72,10 @@ export function migrate() {
   ensureColumn("directory_parties", "company_number", "TEXT NOT NULL DEFAULT ''");
   ensureColumn("envelope_parties", "company_number", "TEXT NOT NULL DEFAULT ''");
   ensureColumn("envelope_parties", "directory_party_id", "TEXT");
+  ensureColumn("directory_parties", "signature_ref", "TEXT");
+  ensureColumn("directory_parties", "signature_method", "TEXT");
+  ensureColumn("directory_parties", "signature_text", "TEXT");
+  ensureColumn("directory_parties", "signature_saved_at", "TEXT");
   ensureColumn("library_templates", "is_sample", "INTEGER NOT NULL DEFAULT 0");
   ensureColumn("users", "password_hash", "TEXT");
   ensureColumn("envelopes", "dd_storage_ref", "TEXT");

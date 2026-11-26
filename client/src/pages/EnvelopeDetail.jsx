@@ -59,6 +59,12 @@ export default function EnvelopeDetail() {
 
   const diligence = envelope.due_diligence;
   const issueBlocked = Boolean(diligence?.applies && !diligence.validatedAt);
+  const signatureGaps = envelope.signature_gaps || [];
+  const savedSigners = envelope.parties
+    .filter((party) => !party.signs_by_link)
+    .map((party) => ({ supplier: "contractor", spv: "supplier", agency: "broker" })[party.role_key])
+    .join(", ")
+    .replace(/, (?=[^,]*$)/, " and ");
   const ddLocked = Boolean(diligence?.validatedAt) || !["draft", "ready"].includes(envelope.status);
   const undatedCount = (diligence?.missing || []).filter((item) => item.includes("received and checked dates")).length;
   const otherMissing = (diligence?.missing || []).filter((item) => !item.includes("received and checked dates"));
@@ -160,10 +166,10 @@ export default function EnvelopeDetail() {
         <button
           className="btn secondary"
           type="button"
-          disabled={busy || envelope.status !== "ready" || issueBlocked}
+          disabled={busy || envelope.status !== "ready" || issueBlocked || signatureGaps.length > 0}
           onClick={() => run("send", () => api.sendEnvelope(id))}
         >
-          {busy === "send" ? "Sending…" : "Send first invitation"}
+          {busy === "send" ? "Sending…" : "Send to the client"}
         </button>
         {envelope.baked_document_id ? (
           <a className="btn secondary" href={api.documentUrl(id, "baked")} target="_blank" rel="noreferrer">
@@ -186,6 +192,29 @@ export default function EnvelopeDetail() {
           Void
         </button>
       </div>
+      {["draft", "ready"].includes(envelope.status) ? (
+        signatureGaps.length ? (
+          <section className="panel" style={{ marginBottom: "1.25rem" }}>
+            <h2>Before sending</h2>
+            <ul className="audit-list">
+              {[...new Set(signatureGaps.map((gap) => gap.label))].map((label) => {
+                const items = signatureGaps.filter((gap) => gap.label === label);
+                return (
+                  <li key={label}>
+                    <strong>{label}</strong>
+                    <Link to={items[0].href}>{items.map((gap) => gap.text).join("; ")}</Link>
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
+        ) : (
+          <p className="muted">
+            Sending applies the saved signatures for the {savedSigners}, dated today, then emails the client its
+            signing link.
+          </p>
+        )
+      ) : null}
 
       {diligence?.applies ? (
         <section className="panel" style={{ marginBottom: "1.25rem" }}>
@@ -739,23 +768,34 @@ export default function EnvelopeDetail() {
                   {party.is_sample ? " · Sample" : ""}
                 </p>
                 <p className="muted">Signs at step {party.order_index}</p>
-                {party.evidence_required ? (
-                  <p className="muted">Final evidence appendix required before sign</p>
+                {party.signs_by_link ? (
+                  <p className="muted">
+                    Signs by link
+                    {party.evidence_required ? ", uploading its incorporation certificate, VAT certificate and director ID" : ""}
+                  </p>
+                ) : party.status === "completed" ? (
+                  <p className="muted">Signed with the saved signature on {String(party.completed_at || "").slice(0, 10)}</p>
                 ) : (
-                  <p className="muted">No final evidence appendix</p>
+                  <p className="muted">
+                    Signs with the saved signature when the contract is sent
+                    {party.evidence_required && party.role_key !== "agency" ? "; director ID from the company record" : ""}
+                  </p>
                 )}
-                <button
-                  type="button"
-                  className="btn secondary"
-                  onClick={() =>
-                    run(`link-${party.id}`, async () => {
-                      const result = await api.partyLink(id, party.id);
-                      setLinks((prev) => ({ ...prev, [party.id]: result.signingLink }));
-                    })
-                  }
-                >
-                  Mint / resend link
-                </button>
+                {party.signs_by_link && envelope.status === "in_progress" && party.status !== "completed" ? (
+                  <button
+                    type="button"
+                    className="btn secondary"
+                    disabled={Boolean(busy)}
+                    onClick={() =>
+                      run(`link-${party.id}`, async () => {
+                        const result = await api.partyLink(id, party.id);
+                        setLinks((prev) => ({ ...prev, [party.id]: result.signingLink }));
+                      })
+                    }
+                  >
+                    Resend link
+                  </button>
+                ) : null}
                 {links[party.id] ? (
                   <p className="meta">
                     <a href={links[party.id]}>Open signing room</a>

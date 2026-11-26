@@ -147,7 +147,8 @@ export default function Library() {
         </label>
         <p className="muted">
           The cover and logo come from that company’s brand pack. Each party gets a
-          signature and a date on the contract. The broker signs and dates the due
+          signature and a date on the contract: the client signs by link, the others with
+          the signature saved on their record. The broker signs and dates the due
           diligence pack.
         </p>
         <section className="party-card">

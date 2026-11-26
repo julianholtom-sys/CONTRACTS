@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../api.js";
 import { emptyParty } from "../PartyFields.jsx";
 import SaveProgressBar from "../SaveProgressBar.jsx";
+import SavedSignature from "../SavedSignature.jsx";
 
 const COPY = {
   contractor: {
@@ -319,35 +320,55 @@ function PartyEditor({ kind, copy, id }) {
           <section className="panel form-grid" style={{ marginTop: "1rem" }}>
             <h2>Documents to add</h2>
             {record.uploads.map((item) => (
-              <div key={item.key}>
-                <strong>
-                  {item.label}{" "}
-                  <span className={`badge ${item.file ? "completed" : "draft"}`}>
-                    {item.file ? "on file" : "needed"}
-                  </span>
-                </strong>
-                {item.file ? <p className="meta">{item.file.original_name}</p> : null}
-                <label className="muted">
-                  {item.file ? "Replace" : "Upload"}
-                  <input
-                    type="file"
-                    accept=".pdf,.png,.jpg,.jpeg"
-                    aria-label={`${item.file ? "Replace" : "Upload"} ${item.label}`}
-                    disabled={Boolean(busy)}
-                    onChange={(e) => {
-                      const file = e.target.files?.[0];
-                      e.target.value = "";
-                      if (file) onUpload(item.key, file);
-                    }}
-                  />
-                </label>
-              </div>
+              <UploadRow key={item.key} item={item} disabled={Boolean(busy)} onUpload={onUpload} />
             ))}
           </section>
           {details ? <PayeInsurance record={record} value={details} onChange={setDetails} /> : null}
+          <section className="panel form-grid" style={{ marginTop: "1rem" }}>
+            <h2>Signing</h2>
+            <p className="muted">
+              Applied to each contract for {record.signer_name} when it is sent, dated that day. The director ID is
+              bound into the signed contract, not the pack.
+            </p>
+            <SavedSignature
+              partyId={record.id}
+              signerName={record.signer_name}
+              signature={record.signature}
+              onSaved={setRecord}
+            />
+            {record.signingUploads.map((item) => (
+              <UploadRow key={item.key} item={item} disabled={Boolean(busy)} onUpload={onUpload} />
+            ))}
+          </section>
         </>
       ) : null}
       <SaveProgressBar dirty={formDirty || detailsDirty} saving={busy === "save"} onSave={onSaveProgress} />
+    </div>
+  );
+}
+
+function UploadRow({ item, disabled, onUpload }) {
+  return (
+    <div>
+      <strong>
+        {item.label}{" "}
+        <span className={`badge ${item.file ? "completed" : "draft"}`}>{item.file ? "on file" : "needed"}</span>
+      </strong>
+      {item.file ? <p className="meta">{item.file.original_name}</p> : null}
+      <label className="muted">
+        {item.file ? "Replace" : "Upload"}
+        <input
+          type="file"
+          accept=".pdf,.png,.jpg,.jpeg"
+          aria-label={`${item.file ? "Replace" : "Upload"} ${item.label}`}
+          disabled={disabled}
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            e.target.value = "";
+            if (file) onUpload(item.key, file);
+          }}
+        />
+      </label>
     </div>
   );
 }

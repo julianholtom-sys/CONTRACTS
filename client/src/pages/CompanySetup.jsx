@@ -4,6 +4,7 @@ import { api } from "../api.js";
 import { emptyParty, PartyFields } from "../PartyFields.jsx";
 import ConfirmDialog from "../ConfirmDialog.jsx";
 import FileSlot from "../FileSlot.jsx";
+import SavedSignature from "../SavedSignature.jsx";
 import ComplianceCompany from "./ComplianceCompany.jsx";
 
 const emptyForm = {
@@ -45,6 +46,7 @@ export default function CompanySetup() {
   const [form, setForm] = useState(emptyForm);
   const [signatory, setSignatory] = useState(emptyParty());
   const [signatoryId, setSignatoryId] = useState("");
+  const [savedSignatory, setSavedSignatory] = useState(null);
   const [detail, setDetail] = useState(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -68,6 +70,7 @@ export default function CompanySetup() {
     setDetail(data);
     setForm(next);
     setSignatoryId(mine?.id || "");
+    setSavedSignatory(mine || null);
     setSignatory(
       mine ? { ...mine, id: "" } : { ...emptyParty(), company_name: data.display_name }
     );
@@ -148,6 +151,7 @@ export default function CompanySetup() {
         company_name: signatory.company_name || form.display_name,
       });
       setSignatoryId(saved.id);
+      setSavedSignatory(saved);
       setSignatory({ ...saved, id: "" });
     } catch (err) {
       setError(err.message);
@@ -359,6 +363,22 @@ export default function CompanySetup() {
           </button>
         )}
       </form>
+
+      {!isNew && savedSignatory ? (
+        <section className="panel form-grid" style={{ marginTop: "1rem" }}>
+          <h2>Broker’s signature</h2>
+          <p className="muted">
+            Applied for {savedSignatory.signer_name} to each contract when it is sent, dated that day. Also offered
+            when signing the due diligence pack.
+          </p>
+          <SavedSignature
+            partyId={savedSignatory.id}
+            signerName={savedSignatory.signer_name}
+            signature={savedSignatory.signature}
+            onSaved={setSavedSignatory}
+          />
+        </section>
+      ) : null}
 
       <p className="muted" style={{ marginTop: "1rem" }}>
         The introductory email is sent by the compliance company, on behalf of this broker.

@@ -15,6 +15,7 @@ import {
 import {
   CONSENT_TEXT,
   applySignatureAndCompleteParty,
+  assertSignsByLink,
   evidenceChecklist,
   evidenceGateOpen,
   getActionableParty,
@@ -33,8 +34,10 @@ import {
   listLibrary,
   saveBrokerSignatory,
   saveLibraryTemplate,
+  serializeParty,
 } from "./library.js";
-import { SIGN_ORDER } from "./parties.js";
+import { SIGN_ORDER, SIGNS_BY_LINK } from "./parties.js";
+import { gapMessage, readPartySignature, savePartySignature, savedSignatureGaps } from "./savedSignatures.js";
 import {
   getPartyRecord,
   listPartyRecords,
@@ -237,7 +240,11 @@ function getEnvelopeBundle(id) {
        ORDER BY p.order_index ASC`
     )
     .all(id)
-    .map((p) => ({ ...p, evidence_required: Boolean(p.evidence_required) }));
+    .map((p) => ({
+      ...p,
+      evidence_required: Boolean(p.evidence_required),
+      signs_by_link: p.role_key === SIGNS_BY_LINK,
+    }));
   const documents = db
     .prepare("SELECT * FROM documents WHERE envelope_id = ? ORDER BY created_at ASC")
     .all(id);
@@ -277,6 +284,7 @@ function getEnvelopeBundle(id) {
       industry: envelope.industry || brand.industry,
     },
     due_diligence: dueDiligenceState(id),
+    signature_gaps: ["draft", "ready"].includes(envelope.status) ? savedSignatureGaps(id) : [],
   };
 }
 
@@ -364,6 +372,23 @@ app.get("/api/parties/:id/files/:fileId", (req, res) => {
   if (!file) return res.status(404).json({ error: "File not found" });
   res.setHeader("Content-Type", file.mime || "application/octet-stream");
   res.send(readBytes(file.storage_ref));
+});
+
+app.put("/api/parties/:id/signature", (req, res) => {
+  try {
+    const row = savePartySignature(req.params.id, req.body || {});
+    res.json(row.kind === "broker" ? serializeParty(row) : getPartyRecord(row.id));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.get("/api/parties/:id/signature", (req, res) => {
+  const bytes = readPartySignature(req.params.id);
+  if (!bytes) return res.status(404).json({ error: "No signature saved" });
+  res.setHeader("Content-Type", "image/png");
+  res.setHeader("Cache-Control", "private, max-age=31536000, immutable");
+  res.send(bytes);
 });
 
 app.post("/api/envelopes/:id/dd/checks", (req, res) => {
@@ -1278,6 +1303,8 @@ app.post("/api/envelopes/:id/send", async (req, res) => {
   try {
     const baseUrl = publicBase(req);
     assertContractMayBeIssued(req.params.id);
+    const gaps = savedSignatureGaps(req.params.id);
+    if (gaps.length) throw new Error(gapMessage(gaps));
     await bakeInSignedPack(req.params.id, { actor: "staff" });
     const result = startSigningInvites(req.params.id, baseUrl, "staff");
     res.json({ ...getEnvelopeBundle(req.params.id), invite: result });
@@ -1798,6 +1825,13 @@ app.post("/api/diligence/:token/sign", async (req, res) => {
 
 app.post("/api/envelopes/:id/parties/:partyId/link", async (req, res) => {
   try {
+    const party = db
+      .prepare("SELECT id FROM envelope_parties WHERE id = ? AND envelope_id = ?")
+      .get(req.params.partyId, req.params.id);
+    if (!party) return res.status(404).json({ error: "Party not found" });
+    assertSignsByLink(party.id);
+    const envelope = db.prepare("SELECT status FROM envelopes WHERE id = ?").get(req.params.id);
+    if (envelope.status !== "in_progress") throw new Error("Send the contract first");
     await bakeInSignedPack(req.params.id, { actor: "staff" });
     const result = inviteParty(req.params.id, req.params.partyId, {
       baseUrl: publicBase(req),

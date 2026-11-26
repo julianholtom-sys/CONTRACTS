@@ -8,10 +8,13 @@ export const PARTY_LABELS = {
   spv: "Supplier (SPV)",
 };
 
+/** The only party who signs by link. The others sign with the signature saved on their record. */
+export const SIGNS_BY_LINK = "company";
+
 /**
- * Documents asked for when the contract is signed.
- * Anything already collected for the due diligence pack is left out:
- * supplier incorporation and name-change certificates stay in that pack.
+ * Documents bound into the completed contract. Anything already collected for the
+ * due diligence pack is left out. The client uploads its own when it signs; the
+ * contractor's and supplier's director ID comes from their record (SIGNING_UPLOADS).
  */
 export const FINAL_EVIDENCE = {
   company: [
@@ -90,4 +93,10 @@ export const PARTY_UPLOADS = {
     ["el_certificate", "Employers’ Liability certificate"],
     ["el_schedule", "Employers’ Liability policy pages naming the SPV"],
   ],
+};
+
+/** Kept on the contractor or supplier record for signing; not part of the due diligence pack. */
+export const SIGNING_UPLOADS = {
+  contractor: [["director_id", "Proof of Director ID (passport or driving license)"]],
+  supplier: [["director_id", "Proof of Director ID (passport or driving license)"]],
 };

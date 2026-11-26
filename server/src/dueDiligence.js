@@ -7,6 +7,7 @@ import { packSources } from "./partyRecords.js";
 import { buildDueDiligencePdf, certificateSignature } from "./ddPack.js";
 import { pdfText, ukDate } from "./coverStamp.js";
 import { SIGNATURE_MAX_HEIGHT } from "./signatureInput.js";
+import { recordForEnvelopeParty, sameSigner, savedSignatureDataUrl } from "./savedSignatures.js";
 import {
   HOLIDAY_METHODS,
   REVIEW_FREQUENCIES,
@@ -699,6 +700,13 @@ export function diligenceSession(partyId) {
     const section = state.sections.find((item) => item.roleKey === role.role_key);
     if (!section) throw new Error("This party does not supply due diligence documents");
     session.section = section;
+  }
+  if (session.mode === "sign" && !session.signed) {
+    const record = recordForEnvelopeParty(envelope, { ...party, role_key: role.role_key });
+    const dataUrl = record && sameSigner(record.signer_name, party.signer_name) ? savedSignatureDataUrl(record) : null;
+    if (dataUrl) {
+      session.savedSignature = { dataUrl, method: record.signature_method, text: record.signature_text || "" };
+    }
   }
   return session;
 }

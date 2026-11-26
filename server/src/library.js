@@ -1,6 +1,7 @@
 import { db, newId, now } from "./db.js";
 import { ensureStoredDateFields } from "./documentFields.js";
 import { resolveBrandPack } from "./bake.js";
+import { dropSignatureIfSignerChanged, signatureView } from "./savedSignatures.js";
 
 const ROLES = new Set(["director", "authorised_signatory"]);
 const KINDS = new Set(["broker", "contractor", "client", "supplier"]);
@@ -34,7 +35,7 @@ export function listDirectory(kind) {
   return rows.map(serializeParty);
 }
 
-function serializeParty(row) {
+export function serializeParty(row) {
   if (!row) return null;
   return {
     id: row.id,
@@ -48,6 +49,7 @@ function serializeParty(row) {
     signer_email: row.signer_email,
     entity_id: row.entity_id || null,
     is_sample: Boolean(row.is_sample),
+    signature: signatureView(row),
   };
 }
 
@@ -70,6 +72,7 @@ export function saveBrokerSignatory(entityId, input) {
         )
         .get(entityId);
   if (existing) {
+    dropSignatureIfSignerChanged(existing, party.signerName);
     db.prepare(
       `UPDATE directory_parties
        SET company_name = ?, signer_name = ?, signer_role = ?, signer_email = ?, entity_id = ?

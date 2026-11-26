@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { db, newId, now } from "./db.js";
-import { INSURANCE_POLICIES, PARTY_LABELS, PARTY_UPLOADS } from "./parties.js";
+import { INSURANCE_POLICIES, PARTY_LABELS, PARTY_UPLOADS, SIGNING_UPLOADS } from "./parties.js";
+import { dropSignatureIfSignerChanged, signatureView } from "./savedSignatures.js";
 import { downloadFiling, fetchCompanyRecord, filingLabel, normaliseCompanyNumber } from "./companiesHouse.js";
 import { screenNames } from "./sanctions.js";
 import { absolutePath, writeBytes } from "./storage.js";
@@ -43,11 +44,11 @@ export function serializeRecord(row) {
   if (!row) return null;
   const registry = registryRow(row.id);
   const files = filesFor(row.id);
-  const uploads = PARTY_UPLOADS[row.kind] || [];
-  const uploadViews = uploads.map(([key, label]) => {
+  const uploadView = ([key, label]) => {
     const file = [...files].reverse().find((item) => item.source === "upload" && item.requirement_key === key);
     return { key, label, file: publicFile(file) };
-  });
+  };
+  const uploadViews = (PARTY_UPLOADS[row.kind] || []).map(uploadView);
   let sanctions = null;
   if (registry?.sanctions_json) {
     try {
@@ -104,6 +105,8 @@ export function serializeRecord(row) {
     companiesHouseFiles: files.filter((file) => file.source === "companies_house").map(publicFile),
     uploads: uploadViews,
     uploadsComplete: uploadViews.every((item) => item.file),
+    signingUploads: (SIGNING_UPLOADS[row.kind] || []).map(uploadView),
+    signature: signatureView(row),
   };
 }
 
@@ -195,6 +198,7 @@ export function savePartyRecord(kind, input) {
     const existing = partyRow(input.id);
     if (!existing || existing.kind !== kind) throw new Error("Company record not found");
     const normalName = input.normal_name === undefined ? existing.normal_name || "" : String(input.normal_name).trim();
+    dropSignatureIfSignerChanged(existing, signerName);
     db.prepare(
       `UPDATE directory_parties
        SET company_name = ?, company_number = ?, signer_name = ?, signer_role = ?, signer_email = ?, normal_name = ?
@@ -323,7 +327,7 @@ function storedName(filing) {
 export function savePartyUpload(partyId, requirementKey, file) {
   const party = partyRow(partyId);
   if (!party) throw new Error("Company record not found");
-  const allowed = PARTY_UPLOADS[party.kind] || [];
+  const allowed = [...(PARTY_UPLOADS[party.kind] || []), ...(SIGNING_UPLOADS[party.kind] || [])];
   const match = allowed.find(([key]) => key === requirementKey);
   if (!match) throw new Error("That document is not requested for this company");
   if (!file?.buffer?.length) throw new Error("Choose a file");

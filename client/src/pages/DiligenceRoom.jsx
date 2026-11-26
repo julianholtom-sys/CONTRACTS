@@ -12,6 +12,7 @@ export default function DiligenceRoom() {
   const [newName, setNewName] = useState("");
   const [signature, setSignature] = useState(null);
   const [consent, setConsent] = useState(false);
+  const [useSaved, setUseSaved] = useState(true);
 
   async function reload() {
     setSession(await api.diligenceSession(token));
@@ -38,6 +39,8 @@ export default function DiligenceRoom() {
 
   const section = session.section;
   const locked = !session.editable;
+  const saved = useSaved ? session.savedSignature : null;
+  const chosen = saved ? { dataUrl: saved.dataUrl, method: saved.method } : signature;
 
   return (
     <div>
@@ -75,7 +78,21 @@ export default function DiligenceRoom() {
             ) : (
               <>
                 <p>{session.consent}</p>
-                <SignaturePad onChange={setSignature} defaultName={session.party.signer_name} />
+                {saved ? (
+                  <div className="sig-stack">
+                    <div className="sig-preview">
+                      <span className="muted">Saved signature</span>
+                      <img src={saved.dataUrl} alt={`${session.party.signer_name}’s signature`} />
+                    </div>
+                    <div>
+                      <button type="button" className="btn secondary" onClick={() => setUseSaved(false)}>
+                        Use a different signature
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <SignaturePad onChange={setSignature} defaultName={session.party.signer_name} />
+                )}
                 <label className="consent">
                   <input
                     type="checkbox"
@@ -97,12 +114,12 @@ export default function DiligenceRoom() {
                 <button
                   type="button"
                   className="btn"
-                  disabled={busy || !session.compiled || !consent || !signature || locked || Boolean(session.blockers?.length)}
+                  disabled={busy || !session.compiled || !consent || !chosen || locked || Boolean(session.blockers?.length)}
                   onClick={() =>
                     run("sign", () =>
                       api.signDiligence(token, {
-                        signatureDataUrl: signature.dataUrl,
-                        method: signature.method,
+                        signatureDataUrl: chosen.dataUrl,
+                        method: chosen.method,
                         typedName: session.party.signer_name,
                         consent,
                       })
