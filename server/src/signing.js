@@ -379,7 +379,8 @@ export async function applySignatureAndCompleteParty({
       )
       .get(envelopeId, field.id);
     if (!value?.value) {
-      throw new Error(`Required field missing: ${field.field_key}`);
+      const label = String(field.label || "").replace(/[_.]{3,}/g, "").replace(/:\s*$/, "").trim();
+      throw new Error(label ? `Fill in "${label}" before signing.` : "Fill in every box before signing.");
     }
   }
 
@@ -580,10 +581,13 @@ export async function finalizeEnvelope(envelopeId) {
       }
       continue;
     }
+    // A value stays inside its box so it never runs into the contract's own words.
+    const room = Number(v.w) - 4;
+    const fit = room > 0 && text ? (10 * room) / font.widthOfTextAtSize(text, 10) : 10;
     page.drawText(text, {
       x: Number(v.x) + 2,
       y: Number(v.y) + 4,
-      size: 10,
+      size: Math.max(6, Math.min(10, fit)),
       font,
       color: rgb(0.1, 0.1, 0.1),
     });

@@ -29,6 +29,9 @@ const SIZES = {
 const HEADING_RE =
   /^(the\s+)?(client|agency|broker|contractor|supplier|company)\s*$/i;
 
+const BLANK_RE = /_{5,}|\.{8,}/;
+const PARTY_DEFINITION_RE = /\(the\s+[“"‘']?[^”"’')]+[”"’']?\)/gi;
+
 function slugPart(value) {
   return String(value || "")
     .toLowerCase()
@@ -66,7 +69,9 @@ function inferTypeFromText(text) {
     return "text";
   }
   if (/\b(company name|registered name|trading name)\b/i.test(t)) return "text";
-  if (/[_]{5,}|\.{8,}/.test(t)) return "text";
+  if (/^(company|registered|registration)\s+(address|number|no\.?|office)\s*:/i.test(t)) return "text";
+  if (/^address\s*:/i.test(t)) return "text";
+  if (BLANK_RE.test(t)) return "text";
   return null;
 }
 
@@ -244,8 +249,63 @@ function itemsToLines(page) {
   });
 }
 
-function boxForLine(line, type, pageWidth, pageHeight) {
+/** Where a "____" or "........" run sits on the line, estimated from the glyph mix of its text item. */
+function blankRun(line) {
+  const weight = (text) =>
+    [...text].reduce((sum, ch) => sum + (ch === " " || ch === "." ? 0.25 : ch === "_" ? 0.45 : 0.55), 0);
+  for (const item of line.items) {
+    const match = item.str.match(BLANK_RE);
+    if (!match) continue;
+    const total = weight(item.str) || 1;
+    const at = (index) => item.x + (item.w * weight(item.str.slice(0, index))) / total;
+    return { start: at(match.index), end: at(match.index + match[0].length) };
+  }
+  return null;
+}
+
+/** "Company Address:" with nothing after it but a party definition such as (the "Client"). */
+function emptyLabel(line) {
+  const index = line.items.findIndex((item) => /:\s*$/.test(item.str));
+  if (index < 0) return null;
+  if (line.items.slice(0, index + 1).map((item) => item.str).join(" ").length > 40) return null;
+  const rest = line.items.slice(index + 1);
+  if (!rest.every((item) => /^\(the\s/i.test(item.str.trim()))) return null;
+  return { end: line.items[index].x + line.items[index].w, next: rest[0] || null };
+}
+
+/** A sentence from the body of the contract rather than a line of a form. */
+function isProse(text) {
+  if (BLANK_RE.test(text)) return false;
+  const words = text.split(/\s+/).filter(Boolean).length;
+  return /[.;,]$/.test(text) || (words > 10 && !/:$/.test(text));
+}
+
+/** Party words before the blank (or in a party definition) say whose line it is; words after it describe the content. */
+function roleText(text) {
+  const blank = text.search(BLANK_RE);
+  if (blank < 0) return text;
+  const definitions = text.match(PARTY_DEFINITION_RE) || [];
+  return [text.slice(0, blank), ...definitions].join(" ");
+}
+
+function boxForLine(line, type, pageWidth, pageHeight, { gapAbove = null, column = null } = {}) {
   const size = SIZES[type] || SIZES.text;
+  // Form lines are often set close together; a box stays below the line above.
+  const h = gapAbove == null ? size.h : Math.max(12, Math.min(size.h, gapAbove + 4));
+  const run = blankRun(line);
+  if (run) {
+    return clampBox(
+      { x: run.start, y: line.y - 4, w: Math.max(run.end - run.start, size.w * 0.6), h },
+      pageWidth,
+      pageHeight
+    );
+  }
+  const label = column == null ? null : emptyLabel(line);
+  if (label) {
+    const x = Math.max(column, label.end + 6);
+    const limit = label.next ? label.next.x - 6 : pageWidth - 48;
+    return clampBox({ x, y: line.y - 4, w: Math.max(40, limit - x), h }, pageWidth, pageHeight);
+  }
   const rightSpace = pageWidth - line.endX - 20;
   if (rightSpace >= size.w * 0.6) {
     return clampBox(
@@ -276,25 +336,47 @@ function detectFromTextPages(pages) {
   let currentRole = null;
   for (const page of pages) {
     const lines = itemsToLines(page);
+    const typeOf = (index) => {
+      const line = lines[index];
+      const next = lines[index + 1];
+      let type = inferTypeFromText(line.text);
+      if (!type && next && /^[_.=]{5,}$/.test(next.text.replace(/\s/g, ""))) type = "text";
+      if (!type) return null;
+      if (line.text.length > 90 && type !== "checkbox") return null;
+      if (type !== "checkbox" && isProse(line.text)) return null;
+      return type;
+    };
+    const types = lines.map((_, index) => typeOf(index));
+    // Values for a block of labels ("Company Name:", "Company Address:") line up after the longest label.
+    const columns = new Map();
+    lines.forEach((line, index) => {
+      const label = types[index] && emptyLabel(line);
+      if (!label) return;
+      const key = Math.round(line.x / 4);
+      columns.set(key, Math.max(columns.get(key) || 0, label.end + 8));
+    });
+    let block = null;
     for (let i = 0; i < lines.length; i += 1) {
       const line = lines[i];
       const heading = headingRole(line.text);
       if (heading) {
         currentRole = heading;
+        block = null;
         continue;
       }
-      const next = lines[i + 1];
-      let type = inferTypeFromText(line.text);
-      if (!type && next && /^[_.=]{5,}$/.test(next.text.replace(/\s/g, ""))) {
-        type = inferTypeFromText(line.text) || "text";
-      }
+      const type = types[i];
       if (!type) continue;
-      if (line.text.length > 90 && type !== "checkbox") continue;
-      const roleKey =
-        inferRoleFromText(line.text) ||
-        currentRole ||
-        null;
-      const box = boxForLine(line, type, page.width, page.height);
+      const isLabel = /^[^:]{1,40}:/.test(line.text);
+      let roleKey = inferRoleFromText(roleText(line.text));
+      // "Company Address:" under "Company Name: … (the "Client")" belongs to the same party.
+      if (!roleKey && isLabel && block && block.page === page.pageIndex && block.y - line.y <= 30) roleKey = block.role;
+      roleKey = roleKey || currentRole || null;
+      if (!isLabel) block = null;
+      else if (roleKey) block = { page: page.pageIndex, y: line.y, role: roleKey };
+      const box = boxForLine(line, type, page.width, page.height, {
+        gapAbove: i > 0 ? lines[i - 1].y - line.y : null,
+        column: columns.get(Math.round(line.x / 4)) ?? null,
+      });
       out.push({
         role_key: roleKey,
         field_key: `${roleKey || "party"}_${type}_p${page.pageIndex}_${out.length}`,
@@ -303,10 +385,23 @@ function detectFromTextPages(pages) {
         page: page.pageIndex,
         ...box,
         source: "text",
+        // "Signed for and on behalf of the Client by …:" introduces a block that may hold its own "Signature" line.
+        weak:
+          type === "signature" &&
+          !BLANK_RE.test(line.text) &&
+          !/\b(signature|sign here|sign below)\b/i.test(line.text),
       });
     }
   }
-  return out;
+  const strong = (field) =>
+    out.some(
+      (other) =>
+        !other.weak &&
+        other.field_type === "signature" &&
+        other.role_key === field.role_key &&
+        other.page === field.page
+    );
+  return out.filter((field) => !(field.weak && field.role_key && strong(field))).map(({ weak, ...field }) => field);
 }
 
 function expandUnassigned(fields, _kind) {

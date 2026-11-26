@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { db, now } from "./db.js";
+import { missingPartyDetails } from "./documentFields.js";
 import { FINAL_EVIDENCE, PARTY_LABELS, SIGN_ORDER, SIGNS_BY_LINK } from "./parties.js";
 import { readSignatureInput } from "./signatureInput.js";
 import { absolutePath, exists, readBytes, writeBase64Png } from "./storage.js";
@@ -157,6 +158,8 @@ export function savedSignatureGaps(envelopeId) {
       add(`add ${record.signer_name}’s signature`);
     }
     if (directorIdRequirement(party)?.is_required && !directorIdFile(record.id)) add("add the director ID");
+    // Only the client fills in boxes by hand, so everyone else's must come from their records.
+    for (const detail of missingPartyDetails(envelopeId, party.role_id)) add(`add the ${detail}; the contract asks for it`);
   }
   return gaps;
 }

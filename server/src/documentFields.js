@@ -1,5 +1,6 @@
 import { db, newId, now, sha256 } from "./db.js";
 import { detectPdfFields, ROLE_LABELS } from "./detectFields.js";
+import { brokerLegalName } from "./packLayout.js";
 
 function roleIdsForTemplate(templateId) {
   const rows = db
@@ -243,23 +244,80 @@ export function snapshotEnvelopeFields(envelopeId, { contractPageOffset, masterP
   }
 }
 
+const DETAIL_NAMES = {
+  company_name: "company name",
+  company_number: "company number",
+  registered_office: "registered office",
+  signer_name: "signatory’s name",
+};
+
+function detailKeyFor(label) {
+  const text = String(label || "").toLowerCase().trim();
+  if (/company (number|no)|registration number|registered number/.test(text)) return "company_number";
+  if (/registered office|registered address|\baddress\b/.test(text)) return "registered_office";
+  if (/company name|registered name|trading name/.test(text)) return "company_name";
+  if (/print name|printed name|full name|name of signatory|signer'?s name|^name:?$/.test(text)) return "signer_name";
+  if (/position|job title|capacity|\btitle\b/.test(text)) return "signer_role";
+  return null;
+}
+
 function partyValueFor(label, party) {
-  const text = String(label || "").toLowerCase();
-  if (/company (number|no)|registration number|registered number/.test(text)) return party.company_number;
-  if (/registered office|registered address|\baddress\b/.test(text)) return party.registered_office;
-  if (/company name|registered name|trading name/.test(text)) return party.company_name;
-  if (/print name|printed name|full name|name of signatory|signer'?s name/.test(text)) return party.signer_name;
-  if (/position|job title|capacity|\btitle\b/.test(text)) {
-    return party.signer_role === "authorised_signatory" ? "Authorised signatory" : "Director";
+  const key = detailKeyFor(label);
+  if (key === "signer_role") return party.signer_role === "authorised_signatory" ? "Authorised signatory" : "Director";
+  return key ? party[key] : "";
+}
+
+/**
+ * Each party as its detail boxes are filled: the record's Companies House details stand in for a
+ * missing registered office or number, and the broker is named by its own legal details.
+ */
+function contractPartyDetails(envelopeId) {
+  const envelope = db.prepare("SELECT entity_id FROM envelopes WHERE id = ?").get(envelopeId);
+  const broker = envelope
+    ? db
+        .prepare("SELECT legal_name, display_name, company_number, registered_office FROM entities WHERE id = ?")
+        .get(envelope.entity_id)
+    : null;
+  return db
+    .prepare(
+      `SELECT p.*, r.role_key, pr.registered_office AS registry_office, pr.company_number AS registry_number
+       FROM envelope_parties p
+       JOIN template_roles r ON r.id = p.role_id
+       LEFT JOIN party_registry pr ON pr.party_id = p.directory_party_id
+       WHERE p.envelope_id = ?`
+    )
+    .all(envelopeId)
+    .map((party) => {
+      const details = {
+        ...party,
+        registered_office: party.registered_office || party.registry_office || "",
+        company_number: party.company_number || party.registry_number || "",
+      };
+      if (party.role_key === "agency" && broker?.legal_name) {
+        details.company_name = brokerLegalName(broker);
+        details.company_number = broker.company_number || details.company_number;
+        details.registered_office = broker.registered_office || details.registered_office;
+      }
+      return details;
+    });
+}
+
+/** Details a party's boxes on the contract ask for that its records don't hold. */
+export function missingPartyDetails(envelopeId, roleId) {
+  const party = contractPartyDetails(envelopeId).find((row) => row.role_id === roleId);
+  if (!party) return [];
+  const missing = new Set();
+  for (const field of fieldsForParty(envelopeId, roleId)) {
+    if (field.field_type !== "text") continue;
+    const key = detailKeyFor(field.label);
+    if (DETAIL_NAMES[key] && !String(party[key] || "").trim()) missing.add(DETAIL_NAMES[key]);
   }
-  return "";
+  return [...missing];
 }
 
 /** Fills each party's detail boxes from what the contract already knows; the signer can still change them. */
 export function prefillPartyFields(envelopeId) {
-  const parties = db
-    .prepare("SELECT * FROM envelope_parties WHERE envelope_id = ?")
-    .all(envelopeId);
+  const parties = contractPartyDetails(envelopeId);
   const filled = new Set(
     db.prepare("SELECT field_id FROM field_values WHERE envelope_id = ?").all(envelopeId).map((row) => row.field_id)
   );

@@ -340,19 +340,19 @@ export async function bakeEnvelope(envelopeId, { actor = "system" } = {}) {
     placeContractPages((index) => signingPages.has(index));
     const contractPageOffset = masterPageMap[0];
 
-    // Stamp legal footer + prepared/issued metadata + logo on first contract page
-    const firstContract = bakedDoc.getPages()[contractPageOffset];
+    // The shared placeholder gets the broker's legal footer and logo; a broker's own contract
+    // already carries its branding, and a second logo would sit on top of it.
+    const firstContract = template.entity_id === entity.id ? null : bakedDoc.getPages()[contractPageOffset];
     if (firstContract) {
-      firstContract.drawText(
-        `${entity.legal_name} · ${entity.company_number} · ${entity.registered_office}`,
-        {
-          x: 40,
-          y: 28,
-          size: 8,
-          font,
-          color: rgb(0.25, 0.25, 0.25),
-        }
-      );
+      const legal = `${entity.legal_name} · ${entity.company_number} · ${entity.registered_office}`;
+      const room = firstContract.getWidth() - 80;
+      firstContract.drawText(legal, {
+        x: 40,
+        y: 28,
+        size: Math.max(5.5, Math.min(8, (8 * room) / font.widthOfTextAtSize(legal, 8))),
+        font,
+        color: rgb(0.25, 0.25, 0.25),
+      });
       if (brand.logo) {
         try {
           const logoImage = await embedLogoImage(bakedDoc, brand.logo);
@@ -425,8 +425,12 @@ export async function bakeEnvelope(envelopeId, { actor = "system" } = {}) {
     const previewFont = await previewDoc.embedFont(StandardFonts.Helvetica);
     const previewPages = previewDoc.getPages();
     if (previewPages[contractPageOffset]) stampContractDates(previewPages[contractPageOffset], previewFont, envelope);
-    const partyRoles = new Set(parties.map((party) => party.role_id));
+    const partyRoles = new Map(parties.map((party) => [party.role_id, PARTY_LABELS[party.role_key] || party.role_key]));
     for (const field of placedFields.filter((f) => partyRoles.has(f.role_id))) {
+      // A contract's own labels ("Date:") rarely say whose box it is.
+      const label = String(field.label || field.field_key).replace(/:\s*$/, "");
+      const party = partyRoles.get(field.role_id);
+      const caption = /\b(contractor|supplier|spv|broker|agency|client)\b/i.test(label) ? label : `${party}: ${label}`;
       const page = previewPages[Math.min(Number(field.page || 0), previewPages.length - 1)];
       const x = Number(field.x);
       const y = Number(field.y);
@@ -443,7 +447,7 @@ export async function bakeEnvelope(envelopeId, { actor = "system" } = {}) {
         opacity: 0.35,
         borderOpacity: 0.9,
       });
-      page.drawText(field.label || field.field_key, {
+      page.drawText(caption, {
         x: x + 3,
         y: y + Math.max(h - 10, 2),
         size: 8,
