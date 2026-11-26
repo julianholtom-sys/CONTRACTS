@@ -20,22 +20,70 @@ export const BODY_BOTTOM = 64;
 
 const WIN_ANSI_EXTRA = "‘’‚“”„–—•…€™‹›ŠšŒœŽžŸ†‡‰ƒ";
 
-/** Standard PDF fonts draw WinAnsi only; anything else becomes a space. */
+/** Standard PDF fonts draw WinAnsi only; anything else becomes a space. Apostrophes are always curly. */
 export function packText(value) {
-  return Array.from(String(value ?? ""))
+  const curly = String(value ?? "")
+    .replace(/(^|[\s([{“"])'/g, "$1‘")
+    .replace(/['`\u2032]/g, "’");
+  return Array.from(curly)
     .map((ch) => {
       const code = ch.codePointAt(0);
       if ((code >= 0x20 && code <= 0x7e) || (code >= 0xa0 && code <= 0xff) || WIN_ANSI_EXTRA.includes(ch)) return ch;
-      return code === 0x2032 ? "'" : " ";
+      return " ";
     })
     .join("");
+}
+
+/** Wraps a comma-separated value (an address) at its commas, so a line never breaks inside a part. */
+export function wrapAtCommas(text, font, size, width) {
+  const lines = [];
+  let current = "";
+  for (const part of String(text ?? "").split(/,\s*/).filter(Boolean)) {
+    const next = current ? `${current}, ${part}` : part;
+    if (!current || font.widthOfTextAtSize(packText(`${next},`), size) <= width) {
+      current = next;
+      continue;
+    }
+    lines.push(`${current},`);
+    current = part;
+  }
+  if (current) lines.push(current);
+  return lines.flatMap((line) => wrapText(line, font, size, width));
+}
+
+/** "UNION WORK SERVICES LIMITED (trading as Union Payroll)", the broker as one legal entity. */
+export function brokerLegalName(entity) {
+  const legal = String(entity?.legal_name || "").trim();
+  const trading = String(entity?.display_name || "").trim();
+  if (!legal) return trading;
+  const bare = (name) => name.toUpperCase().replace(/[^A-Z0-9 ]/g, "").replace(/\s+(LIMITED|LTD|PLC|LLP)$/, "").trim();
+  if (/trading as/i.test(legal) || !trading || bare(trading) === bare(legal)) return legal;
+  return `${legal} (trading as ${trading})`;
+}
+
+const SMALL_WORDS = new Set(["and", "of", "the", "for", "to", "in", "on", "at", "by"]);
+const KEEP_UPPER = new Set(["UK", "LLP", "PLC", "CIC", "LP", "UAE", "USA", "EU"]);
+
+/** "ARC RISK MODELS LIMITED" as "Arc Risk Models Limited", for second and later mentions. */
+export function normalCase(name) {
+  return String(name || "")
+    .replace(/\s*\(trading as [^)]*\)\s*$/i, "")
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((word, index) => {
+      if (/\d/.test(word) || KEEP_UPPER.has(word.replace(/[^A-Z]/g, ""))) return word;
+      const lower = word.toLowerCase();
+      if (index > 0 && SMALL_WORDS.has(lower)) return lower;
+      return lower.replace(/(^|[-'’(&])([a-z])/g, (_, lead, letter) => lead + letter.toUpperCase());
+    })
+    .join(" ");
 }
 
 export function wrapText(text, font, size, width) {
   const lines = [];
   for (const paragraph of String(text ?? "").split("\n")) {
     let current = "";
-    for (const word of packText(paragraph).split(/\s+/).filter(Boolean)) {
+    for (const word of packText(paragraph).split(/[^\S\u00a0]+/).filter(Boolean)) {
       const next = current ? `${current} ${word}` : word;
       if (font.widthOfTextAtSize(next, size) <= width) {
         current = next;
@@ -177,16 +225,11 @@ export class PackWriter {
   /**
    * Bordered table. Columns are { label, width, align? } with widths summing to the content width.
    * A cell is a string, { text, bold, color }, { runs: [{ text, bold, color }] } for mixed styling
-   * on one line, or { check: boolean } for a tick or a cross.
+   * on one line, or { result: "clear" | "flag" | "na" } for a check result.
    */
-  table(columns, rows, { header = true, labelColumn = false, size = 8.5 } = {}) {
+  tableLayout(columns, { labelColumn = false, size = 8.5 } = {}) {
     const pad = 5;
     const lineH = size + 3;
-    const xs = [];
-    columns.reduce((x, column) => {
-      xs.push(x);
-      return x + column.width;
-    }, MARGIN);
     const faceFor = (cell, index, isHeader) =>
       isHeader || (typeof cell === "object" && cell?.bold) || (labelColumn && index === 0) ? this.bold : this.font;
     const cellText = (cell) =>
@@ -196,7 +239,7 @@ export class PackWriter {
       cell.runs.reduce((w, run) => w + this.bold.widthOfTextAtSize(packText(run.text), size), 0) <= columns[index].width - pad * 2;
     const layout = (cells, isHeader) => {
       const lines = cells.map((cell, index) =>
-        cell && typeof cell === "object" && "check" in cell
+        cell && typeof cell === "object" && "result" in cell
           ? [""]
           : runsFit(cell, index)
             ? [cellText(cell)]
@@ -204,6 +247,23 @@ export class PackWriter {
       );
       return { lines, height: Math.max(...lines.map((l) => l.length)) * lineH + pad * 2 - 2 };
     };
+    return { pad, lineH, faceFor, runsFit, layout };
+  }
+
+  /** Height a table takes, including the gap after it, so a short table can be kept on one page. */
+  tableHeight(columns, rows, { header = true, ...options } = {}) {
+    const { layout } = this.tableLayout(columns, options);
+    const headerHeight = header ? layout(columns.map((column) => column.label), true).height : 0;
+    return headerHeight + rows.reduce((sum, row) => sum + layout(row, false).height, 0) + 12;
+  }
+
+  table(columns, rows, { header = true, labelColumn = false, size = 8.5 } = {}) {
+    const xs = [];
+    columns.reduce((x, column) => {
+      xs.push(x);
+      return x + column.width;
+    }, MARGIN);
+    const { pad, lineH, faceFor, runsFit, layout } = this.tableLayout(columns, { labelColumn, size });
     const drawRow = (cells, isHeader) => {
       const { lines, height } = layout(cells, isHeader);
       const top = this.y;
@@ -217,8 +277,8 @@ export class PackWriter {
           borderColor: this.theme.rule,
           borderWidth: 0.6,
         });
-        if (cell && typeof cell === "object" && "check" in cell) {
-          this.checkMark(xs[index] + columns[index].width / 2, top - height / 2, cell.check, size + 2);
+        if (cell && typeof cell === "object" && "result" in cell) {
+          this.resultMark(xs[index] + columns[index].width / 2, top - pad - size + 1, cell.result, size);
           return;
         }
         const color = (typeof cell === "object" && cell?.color) || this.theme.ink;
@@ -258,23 +318,45 @@ export class PackWriter {
     this.y -= 12;
   }
 
-  /** A bold green tick for a passed check, a red cross for a failed one, centred on (cx, cy). */
-  checkMark(cx, cy, passed, size) {
-    const line = (x1, y1, x2, y2, color) =>
+  /** "Clear" with a green tick, "Flag" with a red cross, or a grey "N/A", centred on cx at the text baseline. */
+  resultMark(cx, baseline, result, size) {
+    const word = result === "clear" ? "Clear" : result === "flag" ? "Flag" : "N/A";
+    const color = result === "clear" ? this.theme.ok : result === "flag" ? this.theme.alert : this.theme.muted;
+    const markW = result === "na" ? 0 : size * 0.95;
+    const gap = markW ? size * 0.45 : 0;
+    const left = cx - (markW + gap + this.bold.widthOfTextAtSize(word, size)) / 2;
+    const mid = baseline + size * 0.36;
+    const unit = size * 1.05;
+    const line = (x1, y1, x2, y2) =>
       this.page.drawLine({
-        start: { x: cx + x1 * size, y: cy + y1 * size },
-        end: { x: cx + x2 * size, y: cy + y2 * size },
-        thickness: size * 0.19,
+        start: { x: left + markW / 2 + x1 * unit, y: mid + y1 * unit },
+        end: { x: left + markW / 2 + x2 * unit, y: mid + y2 * unit },
+        thickness: unit * 0.17,
         color,
         lineCap: LineCapStyle.Round,
       });
-    if (passed) {
-      line(-0.42, 0.02, -0.12, -0.3, this.theme.ok);
-      line(-0.12, -0.3, 0.45, 0.36, this.theme.ok);
-    } else {
-      line(-0.32, -0.32, 0.32, 0.32, this.theme.alert);
-      line(-0.32, 0.32, 0.32, -0.32, this.theme.alert);
+    if (result === "clear") {
+      line(-0.4, 0.02, -0.12, -0.28);
+      line(-0.12, -0.28, 0.42, 0.34);
+    } else if (result === "flag") {
+      line(-0.3, -0.3, 0.3, 0.3);
+      line(-0.3, 0.3, 0.3, -0.3);
     }
+    this.draw(word, left + markW + gap, baseline, { size, font: this.bold, color });
+  }
+
+  /** A short "Label: value" line in body text, used for sign-off lines under a table. */
+  labelLine(pairs, { size = 8.5, gap = 18 } = {}) {
+    this.ensure(size + 6);
+    let x = MARGIN;
+    for (const [label, value] of pairs) {
+      const labelText = `${label}: `;
+      this.draw(labelText, x, this.y - size, { size, font: this.bold });
+      x += this.bold.widthOfTextAtSize(packText(labelText), size);
+      this.draw(value, x, this.y - size, { size, color: this.theme.ink });
+      x += this.font.widthOfTextAtSize(packText(value), size) + gap;
+    }
+    this.y -= size + 14;
   }
 }
 
@@ -332,10 +414,10 @@ const numbers = (text) => text.trim().split(/\s+/).map(Number);
 
 /**
  * Removes the words from a page and leaves its artwork. Each text object is located by its
- * first text matrix; `keep(x, y)` keeps the ones that should stay. Font and spacing operators
- * are left in place so any kept text still draws with the state it expects.
+ * first text matrix; `keep(x, y)` keeps the ones that should stay, and `fix(body)` may correct
+ * a kept one. Font and spacing operators are left in place so kept text draws with the state it expects.
  */
-function stripPageText(doc, page, keep = () => false) {
+function stripPageText(doc, page, keep = () => false, fix = (body) => body) {
   const contents = page.node.Contents();
   if (!contents) return;
   const streams =
@@ -358,7 +440,7 @@ function stripPageText(doc, page, keep = () => false) {
     const td = body.match(new RegExp(`(${NUM})\\s+(${NUM})\\s+T[dD]`));
     const [x, y] = tm ? numbers(tm[1]).slice(4) : td ? [Number(td[1]), Number(td[2])] : [0, 0];
     const at = multiply([1, 0, 0, 1, x, y], ctm);
-    if (keep(at[4], at[5])) return match;
+    if (keep(at[4], at[5])) return `${lead}BT ${fix(body)} ET`;
     return `${lead}BT ${body.replace(SHOW_TEXT, " ")} ET`;
   });
   page.node.set(PDFName.of("Contents"), doc.context.register(doc.context.flateStream(Buffer.from(cleaned, "latin1"))));
@@ -459,11 +541,20 @@ export async function addBrandedCover(out, frontAsset, { font, bold, theme }, co
     const white = rgb(1, 1, 1);
     const unit = trackedWidth(content.title, bold, 1, 0.08);
     const titleSize = Math.min(tallest * 0.85, (width * 0.74) / unit);
-    const subSize = titleSize * 0.3;
+    const subSize = content.subtitle ? titleSize * 0.3 : 0;
     const titleTracking = titleSize * 0.08;
     const subTracking = subSize * 0.12;
-    const blockH = titleSize * 0.72 + titleSize * 0.28 + subSize * 0.72;
+    const blockH = titleSize * 0.72 + (subSize ? titleSize * 0.28 + subSize * 0.72 : 0);
     const titleBase = centerY + blockH / 2 - titleSize * 0.72;
+    const padY = titleSize * 0.55;
+    page.drawRectangle({
+      x: 0,
+      y: centerY - blockH / 2 - padY,
+      width,
+      height: blockH + padY * 2,
+      color: rgb(0.02, 0.05, 0.1),
+      opacity: 0.55,
+    });
     drawTracked(page, content.title, {
       x: centerX - trackedWidth(content.title, bold, titleSize, titleTracking) / 2,
       y: titleBase,
@@ -472,14 +563,16 @@ export async function addBrandedCover(out, frontAsset, { font, bold, theme }, co
       color: white,
       tracking: titleTracking,
     });
-    drawTracked(page, content.subtitle, {
-      x: centerX - trackedWidth(content.subtitle, bold, subSize, subTracking) / 2,
-      y: titleBase - titleSize * 0.28 - subSize * 0.72,
-      size: subSize,
-      font: bold,
-      color: white,
-      tracking: subTracking,
-    });
+    if (content.subtitle) {
+      drawTracked(page, content.subtitle, {
+        x: centerX - trackedWidth(content.subtitle, bold, subSize, subTracking) / 2,
+        y: titleBase - titleSize * 0.28 - subSize * 0.72,
+        size: subSize,
+        font: bold,
+        color: white,
+        tracking: subTracking,
+      });
+    }
   }
 
   const legal = lower[0];
@@ -526,11 +619,13 @@ export async function addBrandedCover(out, frontAsset, { font, bold, theme }, co
   if (legal) {
     const legalRight = meta ? meta.x - 12 : right;
     let ly = legal.items[0].y;
-    page.drawText(packText(content.legal[0]), { x: legal.x, y: ly, size: 9, font: bold, color: theme.ink });
-    ly -= 10.5;
+    for (const row of wrapText(content.legal[0], bold, 9, legalRight - legal.x)) {
+      page.drawText(row, { x: legal.x, y: ly, size: 9, font: bold, color: theme.ink });
+      ly -= 10.5;
+    }
     for (const line of content.legal.slice(1)) {
-      for (const row of wrapText(line, font, 7.5, legalRight - legal.x)) {
-        page.drawText(row, { x: legal.x, y: ly, size: 7.5, font, color: theme.muted });
+      for (const row of wrapAtCommas(line, font, 7.5, legalRight - legal.x)) {
+        page.drawText(packText(row), { x: legal.x, y: ly, size: 7.5, font, color: theme.muted });
         ly -= 9.5;
       }
     }
@@ -559,10 +654,10 @@ export function addPlainCover(out, { font, bold, theme }, content, logo) {
   const bandBottom = 480;
   page.drawRectangle({ x: 0, y: bandBottom, width: PAGE.w, height: bandTop - bandBottom, color: theme.accent });
   const titleSize = Math.min(54, (PAGE.w * 0.74) / trackedWidth(content.title, bold, 1, 0.08));
-  const subSize = titleSize * 0.3;
+  const subSize = content.subtitle ? titleSize * 0.3 : 0;
   const titleTracking = titleSize * 0.08;
   const subTracking = subSize * 0.12;
-  const blockH = titleSize * 0.72 + titleSize * 0.28 + subSize * 0.72;
+  const blockH = titleSize * 0.72 + (subSize ? titleSize * 0.28 + subSize * 0.72 : 0);
   const titleBase = (bandTop + bandBottom) / 2 + blockH / 2 - titleSize * 0.72;
   const white = rgb(1, 1, 1);
   drawTracked(page, content.title, {
@@ -573,14 +668,16 @@ export function addPlainCover(out, { font, bold, theme }, content, logo) {
     color: white,
     tracking: titleTracking,
   });
-  drawTracked(page, content.subtitle, {
-    x: (PAGE.w - trackedWidth(content.subtitle, bold, subSize, subTracking)) / 2,
-    y: titleBase - titleSize * 0.28 - subSize * 0.72,
-    size: subSize,
-    font: bold,
-    color: white,
-    tracking: subTracking,
-  });
+  if (content.subtitle) {
+    drawTracked(page, content.subtitle, {
+      x: (PAGE.w - trackedWidth(content.subtitle, bold, subSize, subTracking)) / 2,
+      y: titleBase - titleSize * 0.28 - subSize * 0.72,
+      size: subSize,
+      font: bold,
+      color: white,
+      tracking: subTracking,
+    });
+  }
 
   let y = 436;
   const line = (text, size, face, color, gap) => {
@@ -605,10 +702,12 @@ export function addPlainCover(out, { font, bold, theme }, content, logo) {
   const metaX = PAGE.w - MARGIN - 120;
   page.drawRectangle({ x: metaX - 14, y: 70, width: 1.5, height: 92, color: theme.rule });
   let ly = 150;
-  page.drawText(packText(content.legal[0]), { x: MARGIN, y: ly, size: 10, font: bold, color: theme.ink });
-  ly -= 12.5;
+  for (const row of wrapText(content.legal[0], bold, 10, metaX - 28 - MARGIN)) {
+    page.drawText(row, { x: MARGIN, y: ly, size: 10, font: bold, color: theme.ink });
+    ly -= 12.5;
+  }
   for (const text of content.legal.slice(1)) {
-    for (const row of wrapText(text, font, 8, metaX - 28 - MARGIN)) {
+    for (const row of wrapAtCommas(text, font, 8, metaX - 28 - MARGIN)) {
       page.drawText(row, { x: MARGIN, y: ly, size: 8, font, color: theme.muted });
       ly -= 10.5;
     }
@@ -618,4 +717,123 @@ export function addPlainCover(out, { font, bold, theme }, content, logo) {
     page.drawText(packText(`${label}:`), { x: metaX, y: my, size: 8.5, font: bold, color: theme.ink });
     page.drawText(packText(value), { x: metaX, y: my - 12, size: 8.5, font, color: theme.muted });
   });
+}
+
+const PHONE = /(\+?\d[\d ]{7,}\d)/;
+const EMAIL = /[\w.+-]+@[\w-]+(?:\.[\w-]+)+/;
+const WEBSITE = /website\s*:?\s*((?:https?:\/\/)?[\w-]+(?:\.[\w-]+)+[\w./-]*)/i;
+
+/** The back cover's small text: a company heading, a row of column headers, and values under them. */
+function contactLayout(items) {
+  if (!items.length) return null;
+  const tallest = Math.max(...items.map((item) => item.h));
+  const banner = items.filter((item) => item.h >= Math.max(14, tallest * 0.4));
+  const small = items.filter((item) => !banner.includes(item));
+  if (!small.length) return null;
+  const headingSize = Math.max(...small.map((item) => item.h));
+  const heading = small.filter((item) => item.h === headingSize).sort((a, b) => b.y - a.y)[0];
+  const below = small.filter((item) => item.y < heading.y - 1);
+  if (!below.length) return null;
+  const headerSize = Math.max(...below.map((item) => item.h));
+  const headerY = Math.max(...below.filter((item) => item.h === headerSize).map((item) => item.y));
+  const headers = below
+    .filter((item) => item.h === headerSize && Math.abs(item.y - headerY) < 1.5)
+    .sort((a, b) => a.x - b.x);
+  const values = below.filter((item) => item.y < headerY - 1);
+  if (headers.length < 2 || !values.length) return null;
+  const text = small.map((item) => item.str).join(" ");
+  return {
+    banner,
+    heading,
+    headers,
+    headerY,
+    valueTop: Math.max(...values.map((item) => item.y)),
+    valueSize: Math.max(...values.map((item) => item.h)),
+    phone: (text.match(PHONE) || [])[1] || "",
+    email: (text.match(EMAIL) || [])[0] || "",
+    website: (text.match(WEBSITE) || [])[1] || "",
+  };
+}
+
+function drawContactBlock(page, layout, legal, { font, bold, theme }) {
+  const right = page.getSize().width - 28;
+  const { heading, headers, headerY, valueTop, valueSize: size } = layout;
+  wrapText(legal.name, bold, heading.h, right - heading.x).forEach((row, n) => {
+    page.drawText(row, { x: heading.x, y: heading.y - n * (heading.h + 3), size: heading.h, font: bold, color: theme.ink });
+  });
+  const columns = [
+    {
+      title: "Registered office:",
+      lines: [
+        ...(legal.registeredOffice ? [{ text: legal.registeredOffice, commas: true }] : []),
+        ...(legal.companyNumber ? [{ text: `Company number ${legal.companyNumber}` }] : []),
+      ],
+    },
+    layout.phone ? { title: "Phone:", lines: [{ text: layout.phone }] } : null,
+    layout.email || layout.website
+      ? {
+          title: "Online:",
+          lines: [
+            ...(layout.email ? [{ label: "Email", text: layout.email }] : []),
+            ...(layout.website ? [{ label: "Website", text: layout.website }] : []),
+          ],
+        }
+      : null,
+  ].filter(Boolean);
+  columns.slice(0, headers.length).forEach((column, index) => {
+    const x = headers[index].x;
+    const columnW = (headers[index + 1]?.x ?? right) - x - 16;
+    page.drawText(packText(column.title), { x, y: headerY, size: headers[index].h, font, color: theme.ink });
+    let y = valueTop;
+    for (const line of column.lines) {
+      const labelText = line.label ? packText(`${line.label}: `) : "";
+      const labelW = labelText ? font.widthOfTextAtSize(labelText, size) : 0;
+      const rows = line.commas ? wrapAtCommas(line.text, font, size, columnW) : wrapText(line.text, font, size, columnW - labelW);
+      rows.forEach((row, n) => {
+        if (labelText && n === 0) page.drawText(labelText, { x, y, size, font, color: theme.ink });
+        page.drawText(packText(row), { x: x + (n === 0 ? labelW : 0), y, size, font, color: theme.muted });
+        y -= size + 4;
+      });
+    }
+  });
+}
+
+/**
+ * The broker's back cover with its artwork and banner words kept (a backtick becomes an
+ * apostrophe in the cover's own font) and its contact block set again from the broker's
+ * legal details, so it names the same company as the front cover. Covers whose layout is
+ * not recognised are copied as they are. Returns the number of pages added.
+ */
+export async function addBrandedBackCover(out, backAsset, fonts, legal) {
+  if (!backAsset) return 0;
+  const bytes = readBytes(backAsset.storage_ref);
+  const isPdf = (backAsset.mime || "").includes("pdf") || backAsset.storage_ref.endsWith(".pdf");
+  if (!isPdf) {
+    const page = out.addPage([PAGE.w, PAGE.h]);
+    const image = bytes[0] === 0xff ? await out.embedJpg(bytes) : await out.embedPng(bytes);
+    page.drawImage(image, { x: 0, y: 0, width: PAGE.w, height: PAGE.h });
+    return 1;
+  }
+  const copyAll = async (data) => {
+    const src = await PDFDocument.load(data);
+    const pages = await out.copyPages(src, src.getPageIndices());
+    pages.forEach((page) => out.addPage(page));
+    return pages;
+  };
+  const [first] = await extractTextItems(bytes);
+  const layout = legal?.name ? contactLayout(first?.items || []) : null;
+  if (!layout) return (await copyAll(bytes)).length;
+
+  const isBanner = (x, y) => layout.banner.some((item) => Math.abs(item.x - x) < 1.5 && Math.abs(item.y - y) < 1.5);
+  const src = await PDFDocument.load(bytes);
+  stripPageText(src, src.getPage(0), isBanner, (body) => body.replace(/`/g, "\\222"));
+  const stripped = await src.save();
+  const [after] = await extractTextItems(stripped);
+  const remaining = after?.items || [];
+  if (remaining.length !== layout.banner.length || !remaining.every((item) => isBanner(item.x, item.y))) {
+    return (await copyAll(bytes)).length;
+  }
+  const pages = await copyAll(stripped);
+  drawContactBlock(pages[0], layout, legal, fonts);
+  return pages.length;
 }

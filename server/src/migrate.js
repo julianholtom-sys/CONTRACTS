@@ -78,6 +78,7 @@ export function migrate() {
   ensureColumn("envelopes", "dd_sha256", "TEXT");
   ensureColumn("envelopes", "dd_back_pages", "INTEGER");
   ensureColumn("envelopes", "dd_cert_page", "INTEGER");
+  ensureColumn("envelopes", "dd_cert_top", "REAL");
   ensureColumn("envelopes", "baked_dd_sha256", "TEXT");
   ensureColumn("envelope_parties", "registered_office", "TEXT NOT NULL DEFAULT ''");
   ensureColumn("entities", "intro_email_text", "TEXT");
@@ -269,6 +270,8 @@ export function migrate() {
   `);
   ensureColumn("party_files", "source_ref", "TEXT");
   ensureColumn("directory_parties", "registered_office", "TEXT NOT NULL DEFAULT ''");
+  ensureColumn("directory_parties", "normal_name", "TEXT NOT NULL DEFAULT ''");
+  ensureColumn("envelope_doc_checks", "checked_by", "TEXT");
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS envelope_fields (

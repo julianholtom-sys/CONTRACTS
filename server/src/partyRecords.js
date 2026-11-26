@@ -60,6 +60,7 @@ export function serializeRecord(row) {
     id: row.id,
     kind: row.kind,
     company_name: row.company_name,
+    normal_name: row.normal_name || "",
     company_number: row.company_number || "",
     signer_name: row.signer_name,
     signer_role: row.signer_role,
@@ -147,19 +148,20 @@ export function savePartyRecord(kind, input) {
   if (input.id) {
     const existing = partyRow(input.id);
     if (!existing || existing.kind !== kind) throw new Error("Company record not found");
+    const normalName = input.normal_name === undefined ? existing.normal_name || "" : String(input.normal_name).trim();
     db.prepare(
       `UPDATE directory_parties
-       SET company_name = ?, company_number = ?, signer_name = ?, signer_role = ?, signer_email = ?
+       SET company_name = ?, company_number = ?, signer_name = ?, signer_role = ?, signer_email = ?, normal_name = ?
        WHERE id = ?`
-    ).run(companyName, companyNumber, signerName, signerRole, signerEmail, existing.id);
+    ).run(companyName, companyNumber, signerName, signerRole, signerEmail, normalName, existing.id);
     return serializeRecord(partyRow(existing.id));
   }
   const id = newId();
   db.prepare(
     `INSERT INTO directory_parties (
-      id, kind, company_name, company_number, signer_name, signer_role, signer_email, entity_id, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?)`
-  ).run(id, kind, companyName, companyNumber, signerName, signerRole, signerEmail, now());
+      id, kind, company_name, company_number, signer_name, signer_role, signer_email, normal_name, entity_id, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)`
+  ).run(id, kind, companyName, companyNumber, signerName, signerRole, signerEmail, String(input.normal_name || "").trim(), now());
   return serializeRecord(partyRow(id));
 }
 
@@ -376,6 +378,7 @@ export function packSources(envelopeId) {
       roleKey,
       label,
       companyName: record.company_name,
+      normalName: record.normal_name || "",
       directoryId: record.id,
       companyNumber: record.company_number || "",
       href,
@@ -416,6 +419,7 @@ export function packSources(envelopeId) {
     const check = saved[doc.key];
     doc.receivedOn = check?.received_on || "";
     doc.checkedOn = check?.checked_on || "";
+    doc.checkedBy = check?.checked_by || "";
     if (!doc.receivedOn || !doc.checkedOn) {
       missing.push(`${doc.roleLabel}: received and checked dates for ${doc.label}`);
     }
@@ -443,15 +447,20 @@ function docFromFile(roleKey, label, record, file) {
   };
 }
 
-export function saveDocChecks(envelopeId, checks) {
+export function saveDocChecks(envelopeId, checks, reviewer = "") {
   if (!Array.isArray(checks)) throw new Error("Add a received date and a checked date for each document");
   const current = packSources(envelopeId);
   const allowed = new Set(current.documents.map((doc) => doc.key));
   const upsert = db.prepare(
-    `INSERT INTO envelope_doc_checks (envelope_id, doc_key, received_on, checked_on)
-     VALUES (?, ?, ?, ?)
+    `INSERT INTO envelope_doc_checks (envelope_id, doc_key, received_on, checked_on, checked_by)
+     VALUES (?, ?, ?, ?, ?)
      ON CONFLICT(envelope_id, doc_key) DO UPDATE SET
        received_on = excluded.received_on,
+       checked_by = CASE
+         WHEN envelope_doc_checks.checked_on IS excluded.checked_on AND envelope_doc_checks.checked_by IS NOT NULL
+         THEN envelope_doc_checks.checked_by
+         ELSE excluded.checked_by
+       END,
        checked_on = excluded.checked_on`
   );
   for (const check of checks) {
@@ -472,7 +481,7 @@ export function saveDocChecks(envelopeId, checks) {
     if (received && checked && checked < received) {
       throw new Error("A document cannot be checked before it was received");
     }
-    upsert.run(envelopeId, check.key, received || null, checked || null);
+    upsert.run(envelopeId, check.key, received || null, checked || null, checked ? reviewer || null : null);
   }
   return packSources(envelopeId);
 }

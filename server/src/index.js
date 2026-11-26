@@ -161,8 +161,10 @@ const upload = multer({
 });
 
 function clientMeta(req) {
+  const forwarded = req.headers["x-forwarded-for"]?.toString().split(",")[0].trim();
+  const ip = String(forwarded || req.socket.remoteAddress || "unknown").replace(/^::ffff:/, "");
   return {
-    ip: req.headers["x-forwarded-for"]?.toString().split(",")[0] || req.socket.remoteAddress,
+    ip,
     userAgent: req.headers["user-agent"] || "unknown",
   };
 }
@@ -360,7 +362,7 @@ app.post("/api/envelopes/:id/dd/checks", (req, res) => {
     const envelope = db.prepare("SELECT * FROM envelopes WHERE id = ?").get(req.params.id);
     if (!envelope) return res.status(404).json({ error: "Not found" });
     assertDdEditable(envelope);
-    saveDocChecks(req.params.id, req.body?.checks || []);
+    saveDocChecks(req.params.id, req.body?.checks || [], req.user?.name || req.user?.email || "");
     res.json(getEnvelopeBundle(req.params.id));
   } catch (err) {
     res.status(400).json({ error: err.message });

@@ -75,6 +75,6 @@ export const PARTY_UPLOADS = {
   supplier: [
     ["paye_letter", "HMRC PAYE registration letter"],
     ["el_certificate", "Employers’ Liability certificate"],
-    ["el_schedule", "Employers’ Liability policy pages naming the supplier"],
+    ["el_schedule", "Employers’ Liability policy pages naming the SPV"],
   ],
 };

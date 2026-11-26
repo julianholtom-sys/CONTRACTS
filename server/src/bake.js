@@ -1,6 +1,6 @@
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import { coverDetails, stampCoverDetails, ukDate } from "./coverStamp.js";
-import { addBrandedCover, packTheme } from "./packLayout.js";
+import { addBrandedBackCover, addBrandedCover, brokerLegalName, packTheme } from "./packLayout.js";
 import { db, newId, now, sha256, parseJson } from "./db.js";
 import { appendEvent } from "./events.js";
 import { readBytes, writeBytes } from "./storage.js";
@@ -271,8 +271,7 @@ export async function bakeEnvelope(envelopeId, { actor = "system" } = {}) {
             ["Client", details.client || "—"],
           ],
           legal: [
-            brokerName,
-            ...(entity.legal_name && entity.legal_name !== brokerName ? [entity.legal_name] : []),
+            brokerLegalName(entity) || brokerName,
             ...(entity.company_number ? [`Company number ${entity.company_number}`] : []),
             ...(entity.registered_office ? [`Registered office: ${entity.registered_office}`] : []),
           ],
@@ -349,10 +348,12 @@ export async function bakeEnvelope(envelopeId, { actor = "system" } = {}) {
       appendixStarts.push({ id: appendix.id, pageIndex });
     }
 
-    const backDoc = await pdfFromAsset(brand.back);
-    if (backDoc) {
-      const pages = await bakedDoc.copyPages(backDoc, backDoc.getPageIndices());
-      pages.forEach((p) => bakedDoc.addPage(p));
+    if (brand.back) {
+      await addBrandedBackCover(bakedDoc, brand.back, { font, bold, theme: packTheme(entity) }, {
+        name: brokerLegalName(entity),
+        companyNumber: entity.company_number || "",
+        registeredOffice: entity.registered_office || "",
+      });
     }
 
     const usesPack = ["three", "four"].includes(envelope.party_shape);

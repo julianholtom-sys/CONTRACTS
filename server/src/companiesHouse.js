@@ -153,6 +153,21 @@ function parseFilings(html) {
   return filings;
 }
 
+const CHANGE_TYPE = /^(AD01|AP0[1-4]|TM0[12]|PSC0[1-3]|PSC07)$/;
+
+/** Office moves, officer appointments and resignations, and PSC notices from the filing history. */
+function parseChanges(html) {
+  const changes = [];
+  for (const row of html.split("<tr>").slice(1)) {
+    const type = decode((row.match(/filing-type[^"]*"[^>]*>\s*([A-Z0-9]+)\s*</i) || [])[1]);
+    if (!CHANGE_TYPE.test(type)) continue;
+    const description = decode((row.match(/<td>\s*([\s\S]*?)<\/td>/i) || [])[1]);
+    if (!description) continue;
+    changes.push({ type, filedOn: decode((row.match(/<td class="nowrap">\s*([^<]+?)\s*<\/td>/i) || [])[1]), description });
+  }
+  return changes;
+}
+
 /**
  * One filing per fact: the incorporation, each change of name, the latest
  * registered office move, and the notice for each current PSC. Filing history
@@ -201,6 +216,7 @@ export async function fetchCompanyRecord(companyNumber) {
   const pscs = pscHtml ? parsePeople(pscHtml, "psc") : [];
 
   const filings = [];
+  const changes = [];
   const seen = new Set();
   for (let page = 1; page <= 8; page += 1) {
     const url =
@@ -209,14 +225,22 @@ export async function fetchCompanyRecord(companyNumber) {
         : `${CH}/company/${number}/filing-history?page=${page}`;
     const html = await getText(url);
     const found = parseFilings(html);
-    if (!found.length) break;
+    const changed = parseChanges(html);
+    if (!found.length && !changed.length) break;
     for (const filing of found) {
       if (seen.has(filing.pdfUrl)) continue;
       seen.add(filing.pdfUrl);
       filings.push(filing);
     }
+    for (const change of changed) {
+      const key = `${change.type}|${change.description}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      changes.push(change);
+    }
     if (!html.includes(`page=${page + 1}`)) break;
   }
+  profile.changes = changes;
 
   return { profile, officers, pscs, filings: evidenceFilings(filings, pscs) };
 }

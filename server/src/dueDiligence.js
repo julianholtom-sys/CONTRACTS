@@ -4,9 +4,10 @@ import { appendEvent } from "./events.js";
 import { readBytes, writeBase64Png, writeBytes } from "./storage.js";
 import { DD_REQUIREMENTS, OFFICE_CHANGE_ITEM, PARTY_LABELS } from "./parties.js";
 import { packSources } from "./partyRecords.js";
-import { buildDueDiligencePdf, CERTIFICATE_SIGNATURE } from "./ddPack.js";
+import { buildDueDiligencePdf, certificateSignature } from "./ddPack.js";
+import { wrapText } from "./packLayout.js";
 import { pdfText, ukDate } from "./coverStamp.js";
-import { SIGNATURE_MAX_HEIGHT, describeSignature } from "./signatureInput.js";
+import { SIGNATURE_MAX_HEIGHT } from "./signatureInput.js";
 
 const ACCEPTED = ["application/pdf", "image/jpeg", "image/png"];
 
@@ -378,16 +379,16 @@ export async function compileDueDiligence(envelopeId, actor = "staff") {
   if (!state.readyToCompile) {
     throw new Error(`Due diligence is incomplete: ${state.missing.join("; ")}`);
   }
-  const { bytes, backPages, certPage } = await buildDueDiligencePdf(envelopeId);
+  const { bytes, backPages, certPage, certTop } = await buildDueDiligencePdf(envelopeId);
   const stored = writeBytes("diligence", `${envelopeId}-due-diligence.pdf`, bytes);
   const stamped = now();
   db.prepare(
     `UPDATE envelopes
-     SET dd_compiled_at = ?, dd_storage_ref = ?, dd_sha256 = ?, dd_back_pages = ?, dd_cert_page = ?,
+     SET dd_compiled_at = ?, dd_storage_ref = ?, dd_sha256 = ?, dd_back_pages = ?, dd_cert_page = ?, dd_cert_top = ?,
          dd_validated_at = NULL, dd_validated_by = NULL,
          dd_signed_name = NULL, dd_signed_ip = NULL, dd_signature_ref = NULL
      WHERE id = ?`
-  ).run(stamped, stored.storageRef, stored.sha256, backPages, certPage, envelopeId);
+  ).run(stamped, stored.storageRef, stored.sha256, backPages, certPage, certTop, envelopeId);
   appendEvent({
     envelopeId,
     actor,
@@ -459,7 +460,7 @@ export async function signDueDiligence(envelopeId, {
   const certIndex = envelope.dd_cert_page == null ? -1 : Number(envelope.dd_cert_page);
   if (certIndex >= 0 && certIndex < pdf.getPageCount()) {
     const page = pdf.getPage(certIndex);
-    const box = CERTIFICATE_SIGNATURE;
+    const box = certificateSignature(envelope.dd_cert_top ?? 500);
     const scale = Math.min(
       (box.w - 16) / image.width,
       Math.min(box.h - 12, SIGNATURE_MAX_HEIGHT) / image.height,
@@ -473,12 +474,14 @@ export async function signDueDiligence(envelopeId, {
     });
     const ink = rgb(0.1, 0.12, 0.16);
     page.drawText(pdfText(ukDate(signedAt)), { x: box.dateX, y: box.dateY, size: 9, font: bold, color: ink });
-    const evidence = [
-      `Signed by ${signerName} in Contract Builder at ${ukDate(signedAt)} ${signedAt.slice(11, 19)} UTC`,
-      `${describeSignature(signature.method, signature.font)} · IP ${ip || "—"} · ${party.signer_email}`,
-    ];
+    const evidence = wrapText(
+      `Signed electronically by ${signerName} (${party.signer_email}) on ${ukDate(signedAt)} at ${signedAt.slice(11, 19)} UTC from IP ${ip || "unknown"}`,
+      font,
+      8,
+      box.evidenceW || 483
+    );
     evidence.forEach((line, i) => {
-      page.drawText(pdfText(line), {
+      page.drawText(line, {
         x: box.evidenceX,
         y: box.evidenceY - i * 11,
         size: 8,

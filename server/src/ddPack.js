@@ -11,9 +11,12 @@ import {
   MARGIN,
   PAGE,
   PackWriter,
+  addBrandedBackCover,
   addBrandedCover,
   addPlainCover,
+  brokerLegalName,
   drawFrame,
+  normalCase,
   packText,
   packTheme,
   placeInBody,
@@ -31,7 +34,9 @@ export async function buildDueDiligencePdf(envelopeId) {
     ? db.prepare("SELECT name FROM templates WHERE id = ?").get(envelope.template_id)
     : null;
   const templateName = template?.name || "contract";
+  const contractName = `${details.version === "4-way" ? "Four-party" : "Three-party"} ${templateName}`;
   const brokerName = entity?.display_name || "the broker";
+  const brokerLegal = brokerLegalName(entity) || brokerName;
   const prepared = ukDate(localDay());
 
   const out = await PDFDocument.create();
@@ -48,47 +53,45 @@ export async function buildDueDiligencePdf(envelopeId) {
     }
   }
 
+  const [legalBase, trading] = splitTrading(brokerLegal);
   const cover = {
-    title: "DUE DILIGENCE",
-    subtitle: "CONTRACTOR ONBOARDING PACK",
+    title: "DUE DILIGENCE PACK",
+    subtitle: "",
     brand: brokerName.toUpperCase(),
-    packTitle: "Due Diligence & Onboarding Pack",
-    forUse: `For use with the ${brokerName} ${templateName}`,
+    packTitle: "Due Diligence Pack",
+    forUse: `For use with the ${brokerName} ${contractName}`,
     parties: [
       ["Contractor", details.contractor || "—"],
-      ...(details.supplier ? [["Supplier", details.supplier]] : []),
+      ...(details.supplier ? [["Supplier (SPV)", details.supplier]] : []),
       ["Client", details.client || "—"],
       ["Pack reference", details.reference],
     ],
     legal: [
-      brokerName,
-      ...(entity?.legal_name && entity.legal_name !== brokerName ? [entity.legal_name] : []),
+      legalBase,
+      ...(trading ? [trading] : []),
       ...(entity?.company_number ? [`Company number ${entity.company_number}`] : []),
       ...(entity?.registered_office ? [`Registered office: ${entity.registered_office}`] : []),
     ],
-    meta: [
-      ["Prepared", prepared],
-      ["Doc ID", details.reference],
-    ],
+    meta: [["Prepared", prepared]],
   };
   if (!(await addBrandedCover(out, brand.front, fonts, cover))) addPlainCover(out, fonts, cover, logo);
 
-  const letters = Object.fromEntries(sources.documents.map((doc, index) => [doc.key, annexLetter(index)]));
+  const annexNo = Object.fromEntries(sources.documents.map((doc, index) => [doc.key, String(index + 1)]));
+  const titles = Object.fromEntries(sources.documents.map((doc) => [doc.key, documentTitle(doc)]));
   const writer = new PackWriter(out, fonts);
-  const today = Date.now();
-  const facts = sources.records.map((record) => companyFacts(record, sources.documents, letters, today));
+  const facts = sources.records.map((record) => companyFacts(record, sources.documents, annexNo));
   let part = 0;
   const nextPart = () => String.fromCharCode(65 + part++);
 
   writer.newPage();
-  writePackDetails(writer, nextPart(), { details, entity, brokerName, templateName, prepared, sources });
+  writePackDetails(writer, nextPart(), { details, entity, brokerLegal, contractName, prepared, sources });
   const partFor = {};
   sources.records.forEach((record, index) => {
     partFor[record.roleKey] = nextPart();
-    writeCompany(writer, partFor[record.roleKey], record, facts[index], letters);
+    writeCompany(writer, partFor[record.roleKey], record, facts[index], annexNo);
   });
   writeDisclosures(writer, nextPart(), facts);
-  addCertificate(writer, nextPart(), { entity, broker: sources.byRole.agency, details, sources });
+  const certTop = addCertificate(writer, nextPart(), { entity, brokerLegal, broker: sources.byRole.agency, details, sources, annexNo });
   const certPage = out.getPageCount() - 1;
 
   const attachments = [];
@@ -121,18 +124,18 @@ export async function buildDueDiligencePdf(envelopeId) {
       items: attachments.filter((item) => item.doc.roleKey === record.roleKey),
     }))
     .filter((section) => section.items.length);
-  writeIndex(scratchWriter, placeSections(0, sections), letters);
+  writeIndex(scratchWriter, placeSections(0, sections), annexNo, titles);
   const placed = placeSections(out.getPageCount() + scratch.getPageCount() + 1, sections);
-  writeIndex(writer, placed, letters);
+  writeIndex(writer, placed, annexNo, titles);
 
   for (const section of placed) {
-    addSectionDivider(writer, section, letters);
+    addSectionDivider(writer, section, annexNo);
     for (const item of section.items) {
-      await addAnnexPages(out, writer, item, letters[item.doc.key], fonts);
+      await addAnnexPages(out, writer, item, annexCaption(annexNo[item.doc.key], titles[item.doc.key]), fonts);
     }
   }
 
-  const footer = `DUE DILIGENCE PACK ${details.reference.split("-")[1] || ""} · ${templateName} · Doc ID: ${details.reference}`;
+  const footer = `Due Diligence Pack ${details.reference.split("-")[1] || ""}, Pack reference ${details.reference}`;
   const wordmark = wordmarkParts(brokerName);
   const evidencePages = new Set(
     placed
@@ -153,13 +156,23 @@ export async function buildDueDiligencePdf(envelopeId) {
       watermark: !evidencePages.has(pageNumber),
     });
   }
-  const backPages = await addBackCover(out, brand.back);
-  return { bytes: Buffer.from(await out.save()), backPages, certPage };
+  const backPages = await addBrandedBackCover(out, brand.back, fonts, {
+    name: brokerLegal,
+    companyNumber: entity?.company_number || "",
+    registeredOffice: entity?.registered_office || "",
+  });
+  return { bytes: Buffer.from(await out.save()), backPages, certPage, certTop };
 }
 
 function localDay() {
   const day = new Date();
   return `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, "0")}-${String(day.getDate()).padStart(2, "0")}`;
+}
+
+/** "UNION WORK SERVICES LIMITED (trading as Union Payroll)" as its name and its trading line. */
+function splitTrading(name) {
+  const match = String(name).match(/^(.*?)\s*(\(trading as [^)]*\))\s*$/i);
+  return match ? [match[1], match[2]] : [String(name), ""];
 }
 
 /** Page numbers for each company's divider page and the annex pages after it. */
@@ -184,65 +197,81 @@ function pageRange(item) {
   return end > item.start ? `${item.start}–${end}` : String(item.start);
 }
 
-async function addBackCover(out, back) {
-  if (!back) return 0;
-  const bytes = readBytes(back.storage_ref);
-  const isPdf = (back.mime || "").includes("pdf") || back.storage_ref.endsWith(".pdf");
-  if (isPdf) {
-    const src = await PDFDocument.load(bytes);
-    const pages = await out.copyPages(src, src.getPageIndices());
-    pages.forEach((page) => out.addPage(page));
-    return pages.length;
+/** "6, 7, 8, 10" as "6–8, 10". */
+function annexList(numbers) {
+  const sorted = [...new Set(numbers.filter(Boolean).map(Number))].sort((a, b) => a - b);
+  const runs = [];
+  for (const n of sorted) {
+    const last = runs.at(-1);
+    if (last && n === last[1] + 1) last[1] = n;
+    else runs.push([n, n]);
   }
-  const page = out.addPage([PAGE.w, PAGE.h]);
-  const image = bytes[0] === 0xff ? await out.embedJpg(bytes) : await out.embedPng(bytes);
-  page.drawImage(image, { x: 0, y: 0, width: PAGE.w, height: PAGE.h });
-  return 1;
+  return runs.map(([from, to]) => (to > from ? `${from}–${to}` : String(from))).join(", ");
 }
+
+/** The document's name and date as one title: "Certificate of incorporation, 24/10/2022". */
+function documentTitle(doc) {
+  if (doc.virtual === "sanctions") {
+    const searched = registryBundle(doc.partyId)?.sanctions?.searchedAt;
+    return `UK Sanctions List screening${searched ? `, ${ukDate(searched)}` : ""}`;
+  }
+  const date = filingDate(doc.label);
+  const name = String(doc.label).replace(/\s+[-—]\s+\d{1,2} \w{3,9} \d{4}$/, "");
+  return date ? `${name}, ${chDate(date)}` : name;
+}
+
+const annexCaption = (number, title) => `Annex ${number}: ${title}`;
 
 const KV = [
   { label: "", width: 150 },
   { label: "", width: CONTENT_W - 150 },
 ];
 
-function writePackDetails(writer, letter, { details, entity, brokerName, templateName, prepared, sources }) {
+function writePackDetails(writer, letter, { details, entity, brokerLegal, contractName, prepared, sources }) {
   writer.part(`Part ${letter} — Pack details`);
-  const numbered = (name, number) => (number ? `${name} · company number ${number}` : name || "—");
-  const broker = [brokerName, entity?.legal_name && entity.legal_name !== brokerName ? entity.legal_name : ""]
-    .filter(Boolean)
-    .join(" — ");
+  const numbered = (name, number) => (number ? `${name || "—"}, company\u00a0number\u00a0${number}` : name || "—");
   const contractor = sources.records.find((record) => record.roleKey === "supplier");
   const supplier = sources.records.find((record) => record.roleKey === "spv");
   writer.table(
     KV,
     [
-      ["Broker", numbered(broker, entity?.company_number)],
+      ["Broker", numbered(brokerLegal, entity?.company_number)],
       ["Contractor", numbered(details.contractor, contractor?.companyNumber)],
       ...(details.supplier ? [["Supplier (SPV)", numbered(details.supplier, supplier?.companyNumber)]] : []),
       ["Client", numbered(details.client, sources.byRole.company?.company_number)],
-      ["Contract", `${templateName} · ${details.version}`],
+      ["Contract", contractName],
       ["Pack reference", details.reference],
       ["Prepared", prepared],
-      ["Next review due", "12 months from the date signed"],
     ],
     { header: false, labelColumn: true }
   );
 }
 
-function writeCompany(writer, letter, record, fact, letters) {
+/** The sanctions list is published as "24-Nov-2026". */
+function listDate(value) {
+  const text = String(value || "");
+  return /^\d{1,2}-[A-Za-z]{3}-\d{4}$/.test(text) ? chDate(text.replace(/-/g, " ")) : chDate(text);
+}
+
+function writeCompany(writer, letter, record, fact, annexNo) {
   const bundle = record.directoryId ? registryBundle(record.directoryId) : null;
   const profile = bundle?.profile || {};
   const sanctions = bundle?.sanctions;
   writer.part(`Part ${letter} — ${record.label}: ${record.companyName}`);
 
   writer.sub(`${letter}1  Company details`);
-  const sanctionsAnnex = letters[`sanctions:${record.directoryId}`];
-  const sanctionsDetail = ` · list dated ${sanctions?.listedOn || "—"}${sanctionsAnnex ? ` · Annex ${sanctionsAnnex}` : ""}`;
+  const sanctionsAnnex = annexNo[`sanctions:${record.directoryId}`];
+  const sanctionsDetail = `, list dated ${listDate(sanctions?.listedOn) || "—"}${sanctionsAnnex ? `, Annex ${sanctionsAnnex}` : ""}`;
   const sanctionsCell = !sanctions
     ? "Not run"
     : sanctions.hitCount
-      ? { text: `${sanctions.hitCount} possible match${sanctions.hitCount === 1 ? "" : "es"}${sanctionsDetail}`, color: writer.theme.alert }
-      : { runs: [{ text: "CLEAN", bold: true, color: writer.theme.ok }, { text: sanctionsDetail }] };
+      ? {
+          runs: [
+            { text: `Flag, ${sanctions.hitCount} possible match${sanctions.hitCount === 1 ? "" : "es"}`, bold: true, color: writer.theme.alert },
+            { text: sanctionsDetail },
+          ],
+        }
+      : { runs: [{ text: "Clear", bold: true, color: writer.theme.ok }, { text: sanctionsDetail }] };
   writer.table(
     KV,
     [
@@ -292,21 +321,20 @@ function writeCompany(writer, letter, record, fact, letters) {
       : [["None returned", "", "", ""]]
   );
 
+  const checkColumns = [
+    { label: "Check", width: CONTENT_W - 140 },
+    { label: "Result", width: 80, align: "center" },
+    { label: "Annex", width: 60, align: "center" },
+  ];
+  const checkRows = fact.declarations.map(([result, text, annex]) => [text, { result }, annex || "—"]);
+  writer.ensure(24 + writer.tableHeight(checkColumns, checkRows) + 20);
   writer.sub(`${letter}4  Checks`);
-  writer.table(
-    [
-      { label: "Check", width: CONTENT_W - 110 },
-      { label: "Result", width: 50, align: "center" },
-      { label: "Annex", width: 60, align: "center" },
-    ],
-    fact.declarations.map(([result, text, annex, passWord]) => [
-      passWord && result === "Yes"
-        ? { runs: [{ text: text.slice(0, -passWord.length) }, { text: passWord, bold: true, color: writer.theme.ok }] }
-        : text,
-      { check: result === "Yes" },
-      annex || "—",
-    ])
-  );
+  writer.table(checkColumns, checkRows);
+  writer.y += 4;
+  writer.labelLine([
+    ["Reviewed by", fact.reviewer || "—"],
+    ["Date", fact.reviewedOn ? ukDate(fact.reviewedOn) : "—"],
+  ]);
 }
 
 function writeDisclosures(writer, letter, facts) {
@@ -328,7 +356,7 @@ function filingStatus(text, lastPattern, lastLabel) {
   if (!last && !due) return text;
   return [last ? `${lastLabel} ${chDate(last)}` : "", due ? `next due ${chDate(due)}` : "", /overdue/i.test(text) ? "OVERDUE" : ""]
     .filter(Boolean)
-    .join(" · ");
+    .join(", ");
 }
 
 function shortControl(text) {
@@ -369,11 +397,6 @@ function chPeriod(period) {
     .join(" – ");
 }
 
-function withinMonths(value, months, today) {
-  const ms = parseDay(value);
-  return ms != null && ms <= today && today - ms <= months * 30.44 * 86400000;
-}
-
 function filingDate(label) {
   return (String(label || "").match(/[-—] (\d{1,2} \w{3,9} \d{4})$/) || [])[1] || "";
 }
@@ -384,8 +407,73 @@ function displayName(name) {
   return `${rest} ${surname.charAt(0)}${surname.slice(1).toLowerCase()}`;
 }
 
+const CH_DAY = /\d{1,2} [A-Za-z]{3,9} \d{4}/;
+const withoutTitle = (name) => String(name || "").replace(/^(mr|mrs|ms|miss|mx|dr|sir|prof)\.?\s+/i, "").trim();
+
+/** One line per Companies House change, from the filing history descriptions. */
+function changeLine({ type, description }) {
+  const on = (description.match(new RegExp(`on (${CH_DAY.source})\\s*$`)) || [])[1] || "";
+  const day = chDate(on);
+  if (type === "AD01") {
+    const moved = description.match(new RegExp(`changed from (.+?) to (.+) on ${CH_DAY.source}\\s*$`, "i"));
+    if (moved) return `Registered office changed from ${moved[1]} to ${moved[2]} on ${day}`;
+  }
+  const appointed = description.match(/^Appointment of (.+?) as an? (director|secretary)/i);
+  if (appointed) return `${withoutTitle(appointed[1])} appointed as a ${appointed[2].toLowerCase()} on ${day}`;
+  const ended = description.match(/^Termination of appointment of (.+?) as an? (director|secretary)/i);
+  if (ended) return `${withoutTitle(ended[1])} resigned as a ${ended[2].toLowerCase()} on ${day}`;
+  const notified = description.match(/^(?:Notification|Change of details) of (.+?) as a person with significant control/i);
+  if (notified && /^PSC0[1-3]$/.test(type)) return `${withoutTitle(notified[1])} became a person with significant control on ${day}`;
+  const ceased = description.match(/^Cessation of (.+?) as a person with significant control/i);
+  if (ceased) return `${withoutTitle(ceased[1])} ceased to be a person with significant control on ${day}`;
+  return description.replace(new RegExp(CH_DAY.source, "g"), (match) => chDate(match)).replace(/\.\s*$/, "");
+}
+
+/** Every recorded change of name, office, director and PSC, oldest first. */
+function companyChanges(profile, officers, pscs, mine) {
+  const events = [];
+  const names = [...(profile.previousNames || [])]
+    .map((previous) => ({ ...previous, endedOn: String(previous.period || "").split(/\s[-–]\s/)[1] || "" }))
+    .sort((a, b) => (parseDay(a.endedOn) ?? 0) - (parseDay(b.endedOn) ?? 0));
+  names.forEach((previous, index) => {
+    const next = names[index + 1]?.name || profile.legalName || "its current name";
+    events.push({ at: parseDay(previous.endedOn), text: `Name changed from ${previous.name} to ${next} on ${chDate(previous.endedOn)}` });
+  });
+  if (Array.isArray(profile.changes)) {
+    for (const change of profile.changes) {
+      const on = (change.description.match(new RegExp(`(${CH_DAY.source})\\s*$`)) || [])[1] || change.filedOn;
+      events.push({ at: parseDay(on), text: changeLine(change) });
+    }
+  } else {
+    const incorporated = parseDay(profile.incorporatedOn) ?? 0;
+    for (const doc of mine.filter((item) => item.requirementKey === "registered_office")) {
+      const on = filingDate(doc.label);
+      events.push({ at: parseDay(on), text: `Registered office changed to ${profile.registeredOffice || "its current address"} on ${chDate(on)}` });
+    }
+    for (const officer of officers) {
+      const who = displayName(officer.name);
+      const role = (officer.role || "officer").toLowerCase();
+      if ((parseDay(officer.appointedOn) ?? 0) > incorporated) {
+        events.push({ at: parseDay(officer.appointedOn), text: `${who} appointed as a ${role} on ${chDate(officer.appointedOn)}` });
+      }
+      if (officer.resignedOn) {
+        events.push({ at: parseDay(officer.resignedOn), text: `${who} resigned as a ${role} on ${chDate(officer.resignedOn)}` });
+      }
+    }
+    for (const person of pscs) {
+      if ((parseDay(person.notifiedOn) ?? 0) > incorporated) {
+        events.push({ at: parseDay(person.notifiedOn), text: `${person.name} became a person with significant control on ${chDate(person.notifiedOn)}` });
+      }
+      if (person.ceasedOn) {
+        events.push({ at: parseDay(person.ceasedOn), text: `${person.name} ceased to be a person with significant control on ${chDate(person.ceasedOn)}` });
+      }
+    }
+  }
+  return events.sort((a, b) => (a.at ?? 0) - (b.at ?? 0)).map((event) => event.text);
+}
+
 /** Declarations and disclosures come only from what this pack holds, so nothing is asserted that was not checked. */
-function companyFacts(record, documents, letters, today) {
+function companyFacts(record, documents, annexNo) {
   const bundle = record.directoryId ? registryBundle(record.directoryId) : null;
   const profile = bundle?.profile || {};
   const officers = bundle?.officers || [];
@@ -394,130 +482,149 @@ function companyFacts(record, documents, letters, today) {
   const mine = documents.filter((doc) => doc.partyId === record.directoryId);
   const matches = (keys) => mine.filter((doc) => keys.includes(doc.requirementKey) || keys.includes(doc.virtual));
   const has = (...keys) => keys.every((key) => matches([key]).length > 0);
-  const annex = (...keys) =>
-    matches(keys)
-      .map((doc) => letters[doc.key])
-      .join(", ");
-  const yes = (value) => (value ? "Yes" : "No");
+  const annex = (...keys) => annexList(matches(keys).map((doc) => annexNo[doc.key]));
+  const result = (value) => (value == null ? "na" : value ? "clear" : "flag");
   const accountsOverdue = /overdue/i.test(profile.accounts || "");
   const statementOverdue = /overdue/i.test(profile.confirmationStatement || "");
   const declarations = [
-    [yes(/^active$/i.test(profile.status || "")), "Active at Companies House", ""],
-    [yes(!accountsOverdue), "Accounts up to date", ""],
-    [yes(!statementOverdue), "Confirmation statement up to date", ""],
-    [yes(sanctions && !sanctions.hitCount), "UK Sanctions List CLEAN", annex("sanctions"), "CLEAN"],
+    [result(profile.status ? /^active$/i.test(profile.status) : null), "Active at Companies House", ""],
+    [result(profile.accounts ? !accountsOverdue : null), "Accounts up to date", ""],
+    [result(profile.confirmationStatement ? !statementOverdue : null), "Confirmation statement up to date", ""],
+    [result(sanctions ? !sanctions.hitCount : false), "UK Sanctions List screening", annex("sanctions")],
   ];
   if (record.roleKey === "supplier") {
     declarations.push(
-      [yes(has("vat")), "VAT certificate", annex("vat")],
+      [result(has("vat")), "VAT registration certificate", annex("vat")],
       [
-        yes(has("el_certificate", "pl_certificate", "pi_certificate")),
-        "EL, PL and PI certificates",
+        result(has("el_certificate", "pl_certificate", "pi_certificate")),
+        "Employers’ Liability, Public Liability and Professional Indemnity certificates",
         annex("el_certificate", "pl_certificate", "pi_certificate"),
       ],
-      [yes(has("pi_schedule")), "PI policy schedule and wording", annex("pi_schedule")],
-      [yes(has("bank")), "Bank statement for the account paying workers and HMRC", annex("bank")],
-      [yes(has("payslip")), "Illustrative payslip", annex("payslip")],
-      [yes(has("payroll_chain")), "Payroll chain map; PAYE references and ERNs confirmed", annex("payroll_chain")]
+      [result(has("pi_schedule")), "Professional Indemnity policy schedule and wording", annex("pi_schedule")],
+      [result(has("bank")), "Bank statement for the account paying workers and HMRC", annex("bank")],
+      [result(has("payslip")), "Illustrative payslip", annex("payslip")],
+      [
+        result(has("payroll_chain")),
+        "Payroll chain map, with each PAYE reference and Employer Reference Number (ERN) confirmed",
+        annex("payroll_chain"),
+      ]
     );
   } else {
     declarations.push(
-      [yes(has("paye_letter")), "HMRC PAYE registration letter", annex("paye_letter")],
+      [result(has("paye_letter")), "HMRC PAYE registration letter", annex("paye_letter")],
       [
-        yes(has("el_certificate", "el_schedule")),
-        "EL certificate and policy pages naming the supplier",
+        result(has("el_certificate", "el_schedule")),
+        "Employers’ Liability certificate and policy pages naming the SPV",
         annex("el_certificate", "el_schedule"),
       ]
     );
   }
-  declarations.push([
-    yes(mine.length > 0 && mine.every((doc) => doc.receivedOn && doc.checkedOn)),
-    "All documents received and checked",
-    "",
-  ]);
 
   const disclosures = [];
-  if (profile.status && !/^active$/i.test(profile.status)) {
-    disclosures.push(`Shown as ${profile.status} at Companies House.`);
+  if (profile.status && !/^active$/i.test(profile.status)) disclosures.push(`Shown as ${profile.status} at Companies House`);
+  if (accountsOverdue) disclosures.push("Accounts overdue");
+  if (statementOverdue) disclosures.push("Confirmation statement overdue");
+  const incorporated = parseDay(profile.incorporatedOn);
+  if (incorporated != null && Date.now() - incorporated < 365.25 * 86400000) {
+    disclosures.push(`Incorporated on ${chDate(profile.incorporatedOn)}, under a year ago`);
   }
-  if (accountsOverdue) disclosures.push("Accounts overdue.");
-  if (statementOverdue) disclosures.push("Confirmation statement overdue.");
-  if (withinMonths(profile.incorporatedOn, 12, today)) {
-    disclosures.push(`Incorporated ${chDate(profile.incorporatedOn)}, under a year ago.`);
-  }
-  for (const previous of profile.previousNames || []) {
-    const changedOn = String(previous.period || "").split(/\s[-–]\s/)[1];
-    if (withinMonths(changedOn, 24, today)) disclosures.push(`Name changed from ${previous.name} on ${chDate(changedOn)}.`);
-  }
-  for (const doc of mine) {
-    const date = filingDate(doc.label);
-    if (doc.requirementKey === "registered_office" && withinMonths(date, 12, today)) {
-      disclosures.push(`Registered office changed ${chDate(date)}.`);
-    }
-  }
-  for (const officer of officers) {
-    const who = displayName(officer.name);
-    const role = (officer.role || "officer").toLowerCase();
-    if (withinMonths(officer.appointedOn, 12, today)) disclosures.push(`${who} appointed ${role} ${chDate(officer.appointedOn)}.`);
-    if (withinMonths(officer.resignedOn, 24, today)) disclosures.push(`${who} resigned as ${role} ${chDate(officer.resignedOn)}.`);
-  }
-  for (const person of pscs) {
-    if (withinMonths(person.ceasedOn, 24, today)) disclosures.push(`${person.name} ceased as a PSC ${chDate(person.ceasedOn)}.`);
-  }
+  disclosures.push(...companyChanges(profile, officers, pscs, mine));
   if (sanctions?.hitCount) {
     const names = (sanctions.hits || []).map((hit) => hit.name).join("; ");
-    disclosures.push(
-      `${sanctions.hitCount} possible UK Sanctions List match${sanctions.hitCount === 1 ? "" : "es"}: ${names}.`
-    );
+    disclosures.push(`${sanctions.hitCount} possible UK Sanctions List match${sanctions.hitCount === 1 ? "" : "es"}: ${names}`);
   }
-  return { label: record.label, companyName: record.companyName, roleKey: record.roleKey, declarations, disclosures };
+
+  const reviewed = mine.filter((doc) => doc.checkedOn).sort((a, b) => b.checkedOn.localeCompare(a.checkedOn));
+  return {
+    label: record.label,
+    companyName: record.companyName,
+    roleKey: record.roleKey,
+    declarations,
+    disclosures,
+    reviewer: reviewed.find((doc) => doc.checkedBy)?.checkedBy || "",
+    reviewedOn: reviewed[0]?.checkedOn || "",
+  };
 }
 
-const CERT_TOP = 500;
 const CERT_LABEL_W = 150;
 const CERT_ROW = 22;
 const CERT_SIGNATURE_ROW = 52;
+const CERT_TABLE_H = CERT_ROW * 4 + CERT_SIGNATURE_ROW;
+const CERT_EVIDENCE_H = 44;
 
-/** Where signing stamps the signature, the date and the evidence lines on the certificate page. */
-export const CERTIFICATE_SIGNATURE = {
-  x: MARGIN + CERT_LABEL_W + 4,
-  y: CERT_TOP - CERT_ROW * 3 - CERT_SIGNATURE_ROW + 5,
-  w: CONTENT_W - CERT_LABEL_W - 8,
-  h: CERT_SIGNATURE_ROW - 10,
-  dateX: MARGIN + CERT_LABEL_W + 6,
-  dateY: CERT_TOP - CERT_ROW * 4 - CERT_SIGNATURE_ROW + 7.5,
-  evidenceX: MARGIN,
-  evidenceY: CERT_TOP - CERT_ROW * 4 - CERT_SIGNATURE_ROW - 14,
-};
+/** Where signing stamps the signature, the date and the audit line, for a signature table starting at `top`. */
+export function certificateSignature(top) {
+  return {
+    x: MARGIN + CERT_LABEL_W + 4,
+    y: top - CERT_ROW * 3 - CERT_SIGNATURE_ROW + 5,
+    w: CONTENT_W - CERT_LABEL_W - 8,
+    h: CERT_SIGNATURE_ROW - 10,
+    dateX: MARGIN + CERT_LABEL_W + 6,
+    dateY: top - CERT_TABLE_H + 7.5,
+    evidenceX: MARGIN,
+    evidenceY: top - CERT_TABLE_H - 14,
+    evidenceW: CONTENT_W,
+  };
+}
 
-function addCertificate(writer, letter, { entity, broker, details, sources }) {
+/** Capitals the first time a company is named, normal case after that. */
+function mentions() {
+  const seen = new Set();
+  return (name, normal) => {
+    if (!name) return "";
+    const key = String(name).toUpperCase();
+    if (seen.has(key)) return normal || normalCase(name);
+    seen.add(key);
+    return name;
+  };
+}
+
+/** Lays the certificate out on the current page when it all fits, otherwise on a new one. Returns the signature table's top. */
+function addCertificate(writer, letter, { entity, brokerLegal, broker, details, sources, annexNo }) {
   const { font, bold, theme } = writer;
-  writer.newPage();
-  writer.part(`Part ${letter} — Director's certificate`);
-  const legal = entity?.legal_name || entity?.display_name || "the broker";
+  const name = mentions();
+  const legal = brokerLegal || entity?.display_name || "the broker";
   const role = broker?.signer_role === "authorised_signatory" ? "Authorised signatory" : "Director";
-  const signer = broker?.signer_name || "The broker's director";
-  writer.text(`Given by ${legal} for the contract with ${details.client || "the client"}. Pack reference ${details.reference}.`, {
-    color: theme.muted,
-    after: 8,
-  });
-  writer.text(`I, ${signer}, ${role} of ${legal}, certify that:`, { size: 9.5, after: 6 });
-
+  const signer = broker?.signer_name || "The broker’s director";
   const contractor = sources.records.find((record) => record.roleKey === "supplier");
   const supplier = sources.records.find((record) => record.roleKey === "spv");
-  const companies = [contractor?.companyName, supplier?.companyName].filter(Boolean).join(" and ");
+  const annexFor = (record, key) => {
+    const doc = sources.documents.find((item) => item.partyId === record?.directoryId && item.requirementKey === key);
+    return doc ? ` (Annex\u00a0${annexNo[doc.key]})` : "";
+  };
+
+  const intro = `Given by ${name(legal)} for the contract with ${name(details.client) || "the Client"}. Pack reference ${details.reference}.`;
+  const opening = `I, ${signer}, ${role} of ${name(legal)}, certify that:`;
+  const companies = [contractor, supplier]
+    .filter(Boolean)
+    .map((record) => name(record.companyName, record.normalName))
+    .join(" and ");
   const hmrc = [
-    contractor ? `${contractor.companyName}'s payroll chain map and PAYE/ERN confirmation` : "",
-    supplier ? `${supplier.companyName}'s HMRC PAYE registration letter` : "",
+    contractor ? `${name(contractor.companyName, contractor.normalName)}’s payroll chain map and PAYE/ERN confirmation${annexFor(contractor, "payroll_chain")}` : "",
+    supplier ? `${name(supplier.companyName, supplier.normalName)}’s HMRC PAYE registration letter${annexFor(supplier, "paye_letter")}` : "",
   ]
     .filter(Boolean)
     .join(" and ");
   const statements = [
-    `I have reviewed the Companies House records, sanctions search and annexed documents for ${companies || "the companies in this pack"}.`,
+    `I have reviewed the Companies House records, UK Sanctions List screening and annexed documents for ${companies || "the companies in this pack"}.`,
     "Each document was received and checked on the dates in the annex index.",
-    `HMRC standing is evidenced by ${hmrc || "the annexed documents"}.`,
-    "The declarations and disclosures are complete and accurate. I know of nothing else the client should be told.",
+    `HMRC registration is evidenced by ${hmrc || "the annexed documents"}.`,
+    "The declarations and disclosures are complete and accurate. I am not aware of any further matter material to the Client’s assessment of the supply chain.",
   ];
+  const companyRow = name(legal);
+
+  const lineCount = (text, indent = 0) => wrapText(text, font, 9.5, CONTENT_W - indent).length;
+  const needed =
+    43 +
+    lineCount(intro) * 13.5 + 8 +
+    lineCount(opening) * 13.5 + 6 +
+    statements.reduce((sum, statement) => sum + lineCount(statement, 20) * 13.5 + 5, 0) +
+    10 + CERT_TABLE_H + CERT_EVIDENCE_H;
+  if (!writer.page || writer.y - needed < BODY_BOTTOM) writer.newPage();
+
+  writer.part(`Part ${letter} — Director’s certificate`);
+  writer.text(intro, { size: 9.5, after: 8 });
+  writer.text(opening, { size: 9.5, after: 6 });
   statements.forEach((statement, index) => {
     wrapText(statement, font, 9.5, CONTENT_W - 20).forEach((line, n) => {
       if (n === 0) writer.draw(`${index + 1}.`, MARGIN, writer.y - 9.5, { size: 9.5, font: bold });
@@ -526,16 +633,18 @@ function addCertificate(writer, letter, { entity, broker, details, sources }) {
     });
     writer.y -= 5;
   });
+  writer.y -= 10;
 
   const page = writer.page;
+  const certTop = writer.y;
   const rows = [
-    ["Name — broker director", signer, CERT_ROW],
+    ["Name", signer, CERT_ROW],
     ["Position", role, CERT_ROW],
-    ["Company", legal, CERT_ROW],
+    ["Company", companyRow, CERT_ROW],
     ["Signature", "", CERT_SIGNATURE_ROW],
     ["Date signed", "", CERT_ROW],
   ];
-  let top = CERT_TOP;
+  let top = certTop;
   for (const [label, value, height] of rows) {
     page.drawRectangle({ x: MARGIN, y: top - height, width: CERT_LABEL_W, height, borderColor: theme.rule, borderWidth: 0.6 });
     page.drawRectangle({
@@ -553,34 +662,24 @@ function addCertificate(writer, letter, { entity, broker, details, sources }) {
     }
     top -= height;
   }
+  writer.y = certTop - CERT_TABLE_H - CERT_EVIDENCE_H;
+  return certTop;
 }
 
-function annexLetter(index) {
-  let n = index;
-  let label = "";
-  do {
-    label = String.fromCharCode(65 + (n % 26)) + label;
-    n = Math.floor(n / 26) - 1;
-  } while (n >= 0);
-  return label;
-}
-
-function writeIndex(writer, sections, letters) {
+function writeIndex(writer, sections, annexNo, titles) {
   writer.newPage();
   writer.part("Annex index");
   for (const section of sections) {
     writer.sub(sectionTitle(section));
     writer.table(
       [
-        { label: "Annex", width: 40, align: "center" },
-        { label: "Document", width: CONTENT_W - 220 },
+        { label: "Annex", width: CONTENT_W - 180 },
         { label: "Pages", width: 50, align: "center" },
         { label: "Received", width: 65, align: "center" },
         { label: "Checked", width: 65, align: "center" },
       ],
       section.items.map((item) => [
-        { text: letters[item.doc.key], bold: true },
-        item.doc.label,
+        annexCaption(annexNo[item.doc.key], titles[item.doc.key]),
         pageRange(item),
         ukDate(item.doc.receivedOn) || "—",
         ukDate(item.doc.checkedOn) || "—",
@@ -591,12 +690,12 @@ function writeIndex(writer, sections, letters) {
 }
 
 /** Leading page for one company's evidence, headed like its Part in the body and in the index. */
-function addSectionDivider(writer, section, letters) {
+function addSectionDivider(writer, section, annexNo) {
   const { font, bold, theme } = writer;
   const page = writer.newPage();
   const { record } = section;
-  const first = letters[section.items[0].doc.key];
-  const last = letters[section.items[section.items.length - 1].doc.key];
+  const first = annexNo[section.items[0].doc.key];
+  const last = annexNo[section.items[section.items.length - 1].doc.key];
   let y = 650;
   const line = (text, size, face, color, gap) => {
     for (const row of wrapText(text, face, size, CONTENT_W)) {
@@ -604,25 +703,15 @@ function addSectionDivider(writer, section, letters) {
       y -= size + gap;
     }
   };
-  line(first === last ? `EVIDENCE · ANNEX ${first}` : `EVIDENCE · ANNEXES ${first}–${last}`, 9, bold, theme.muted, 24);
+  line(first === last ? `ANNEX ${first}` : `ANNEXES ${first}–${last}`, 9, bold, theme.muted, 24);
   line(`PART ${section.letter} — ${record.label.toUpperCase()}`, 26, bold, theme.accent, 10);
   line(record.companyName, 18, bold, theme.ink, 8);
   if (record.companyNumber) line(`Company number ${record.companyNumber}`, 10, font, theme.muted, 6);
   page.drawRectangle({ x: MARGIN, y: y - 4, width: 80, height: 3, color: theme.accent });
   writer.y = y - 30;
-  writer.table(
-    [
-      { label: "Annex", width: 40, align: "center" },
-      { label: "Document", width: CONTENT_W - 90 },
-      { label: "Pages", width: 50, align: "center" },
-    ],
-    section.items.map((item) => [{ text: letters[item.doc.key], bold: true }, item.doc.label, pageRange(item)]),
-    { size: 8.5 }
-  );
 }
 
-function annexCaption(page, { font, bold, theme }, letter, doc, continued = false) {
-  const caption = `${letter}. ${String(doc.label).replace(" — ", ", ")} — ${doc.companyName}`;
+function drawCaption(page, { font, bold, theme }, caption, continued = false) {
   if (continued) {
     const line = wrapText(`${caption} (continued)`, font, 8, CONTENT_W)[0];
     page.drawText(line, { x: MARGIN, y: BODY_TOP - 9, size: 8, font, color: theme.muted });
@@ -632,19 +721,19 @@ function annexCaption(page, { font, bold, theme }, letter, doc, continued = fals
   page.drawText(line, { x: MARGIN, y: BODY_TOP - 10, size: 9.5, font: bold, color: theme.ink });
 }
 
-async function addAnnexPages(out, writer, item, letter, fonts) {
+async function addAnnexPages(out, writer, item, caption, fonts) {
   const { theme } = fonts;
   const bottom = BODY_BOTTOM + 4;
   if (item.virtual) {
     const page = writer.newPage();
-    annexCaption(page, fonts, letter, item.doc);
+    drawCaption(page, fonts, caption);
     writer.y = BODY_TOP - 26;
     writeSanctions(writer, registryBundle(item.doc.partyId)?.sanctions);
     return;
   }
   if (item.image) {
     const page = out.addPage([PAGE.w, PAGE.h]);
-    annexCaption(page, fonts, letter, item.doc);
+    drawCaption(page, fonts, caption);
     const image = item.bytes[0] === 0xff ? await out.embedJpg(item.bytes) : await out.embedPng(item.bytes);
     placeInBody(page, image, { top: BODY_TOP - 22, bottom, rule: theme.rule });
     return;
@@ -659,7 +748,7 @@ async function addAnnexPages(out, writer, item, letter, fonts) {
   }
   embedded.forEach((source, n) => {
     const page = out.addPage([PAGE.w, PAGE.h]);
-    annexCaption(page, fonts, letter, item.doc, n > 0);
+    drawCaption(page, fonts, caption, n > 0);
     placeInBody(page, source, {
       top: n === 0 ? BODY_TOP - 22 : BODY_TOP - 18,
       bottom,
@@ -676,7 +765,7 @@ function writeSanctions(writer, sanctions) {
   }
   const query = sanctions.query || {};
   const rows = [
-    ["List", `UK Sanctions List published ${sanctions.listedOn || "—"}`],
+    ["List", `UK Sanctions List published ${listDate(sanctions.listedOn) || "—"}`],
     ["Source", sanctions.listUrl || "https://sanctionslist.fcdo.gov.uk/"],
     ["Searched", ukDate(sanctions.searchedAt) || "—"],
     ["Company", query.companyName || "—"],
@@ -686,8 +775,8 @@ function writeSanctions(writer, sanctions) {
     [
       "Result",
       sanctions.hitCount
-        ? { text: `${sanctions.hitCount} possible match${sanctions.hitCount === 1 ? "" : "es"}`, color: writer.theme.alert, bold: true }
-        : { text: "CLEAN", bold: true, color: writer.theme.ok },
+        ? { text: `Flag, ${sanctions.hitCount} possible match${sanctions.hitCount === 1 ? "" : "es"}`, color: writer.theme.alert, bold: true }
+        : { text: "Clear", bold: true, color: writer.theme.ok },
     ],
   ];
   writer.table(KV, rows, { header: false, labelColumn: true });

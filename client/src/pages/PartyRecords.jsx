@@ -85,6 +85,7 @@ function PartyEditor({ kind, copy, id }) {
         setRecord(data);
         setForm({
           company_name: data.company_name,
+          normal_name: data.normal_name,
           company_number: data.company_number,
           signer_name: data.signer_name,
           signer_role: data.signer_role,
@@ -188,6 +189,14 @@ function PartyEditor({ kind, copy, id }) {
           />
         </label>
         <label>
+          Name in normal case (optional)
+          <input
+            value={form.normal_name || ""}
+            onChange={(e) => setField("normal_name", e.target.value)}
+            placeholder="e.g. MissionOpsAI Ltd"
+          />
+        </label>
+        <label>
           Signatory
           <input
             value={form.signer_name || ""}
@@ -236,7 +245,7 @@ function PartyEditor({ kind, copy, id }) {
                     {record.registry.sanctions.hitCount ? (
                       `${record.registry.sanctions.hitCount} possible match`
                     ) : (
-                      <strong style={{ color: "var(--ok)" }}>CLEAN</strong>
+                      <strong style={{ color: "var(--ok)" }}>Clear</strong>
                     )}
                   </>
                 ) : null}
