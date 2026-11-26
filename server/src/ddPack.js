@@ -2,7 +2,7 @@ import { PDFDocument, StandardFonts } from "pdf-lib";
 import { db } from "./db.js";
 import { readBytes } from "./storage.js";
 import { embedLogoImage, resolveBrandPack } from "./bake.js";
-import { coverDetails, ukDate } from "./coverStamp.js";
+import { coverDetails, coverTokens, ukDate } from "./coverStamp.js";
 import { packSources, registryBundle } from "./partyRecords.js";
 import {
   REVIEW_FREQUENCIES,
@@ -87,6 +87,23 @@ export async function buildDueDiligencePdf(envelopeId) {
       ...(entity?.registered_office ? [`Registered office: ${entity.registered_office}`] : []),
     ],
     meta: [["Prepared", prepared]],
+    fill: {
+      tokens: coverTokens(details, entity, { brokerLegal, document: "Due Diligence Pack", prepared }),
+      fields: {
+        title: "Due diligence pack",
+        kicker: "DUE DILIGENCE PACK",
+        subtitle: "[Shape] contract · [Party roles]",
+        summary: `For use with the ${brokerName} ${contractName}.`,
+      },
+      rows: [
+        ["Client", details.client || "—"],
+        ["Contractor", details.contractor || "—"],
+        ...(details.supplier ? [["Supplier", details.supplier]] : []),
+        ["Broker", brokerLegal],
+        ["Reference", details.reference, true],
+        ["Prepared", prepared],
+      ],
+    },
   };
   if (!(await addBrandedCover(out, brand.front, fonts, cover))) addPlainCover(out, fonts, cover, logo);
 
@@ -172,11 +189,17 @@ export async function buildDueDiligencePdf(envelopeId) {
       watermark: !evidencePages.has(pageNumber),
     });
   }
-  const backPages = await addBrandedBackCover(out, brand.back, fonts, {
-    name: brokerLegal,
-    companyNumber: entity?.company_number || "",
-    registeredOffice: entity?.registered_office || "",
-  });
+  const backPages = await addBrandedBackCover(
+    out,
+    brand.back,
+    fonts,
+    {
+      name: brokerLegal,
+      companyNumber: entity?.company_number || "",
+      registeredOffice: entity?.registered_office || "",
+    },
+    cover.fill
+  );
   return { bytes: Buffer.from(await out.save()), backPages, certPage, certTop };
 }
 

@@ -1,5 +1,5 @@
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
-import { coverDetails, stampCoverDetails, ukDate } from "./coverStamp.js";
+import { coverDetails, coverTokens, stampCoverDetails, ukDate } from "./coverStamp.js";
 import { addBrandedBackCover, addBrandedCover, brokerLegalName, packTheme } from "./packLayout.js";
 import { db, newId, now, sha256, parseJson } from "./db.js";
 import { appendEvent } from "./events.js";
@@ -248,15 +248,31 @@ export async function bakeEnvelope(envelopeId, { actor = "system" } = {}) {
     const font = await bakedDoc.embedFont(StandardFonts.Helvetica);
     const bold = await bakedDoc.embedFont(StandardFonts.HelveticaBold);
 
+    const details = coverDetails(
+      envelope,
+      Object.fromEntries(parties.map((party) => [party.role_key, party])),
+      entity,
+      "Contract"
+    );
+    const brokerName = entity.display_name || "the broker";
+    const brokerLegal = brokerLegalName(entity) || brokerName;
+    const coverFill = {
+      tokens: coverTokens(details, entity, {
+        brokerLegal,
+        document: template.name,
+        prepared: envelope.prepared_on ? ukDate(envelope.prepared_on) : "",
+      }),
+      rows: [
+        ["Client", details.client || "—"],
+        ["Contractor", details.contractor || "—"],
+        ...(details.supplier ? [["Supplier", details.supplier]] : []),
+        ["Broker", brokerLegal],
+        ["Reference", details.reference, true],
+        ["Dated", "Date of last signature"],
+      ],
+    };
     const frontDoc = await pdfFromAsset(brand.front);
     if (frontDoc) {
-      const details = coverDetails(
-        envelope,
-        Object.fromEntries(parties.map((party) => [party.role_key, party])),
-        entity,
-        "Contract"
-      );
-      const brokerName = entity.display_name || "the broker";
       const branded = await addBrandedCover(
         bakedDoc,
         brand.front,
@@ -271,7 +287,7 @@ export async function bakeEnvelope(envelopeId, { actor = "system" } = {}) {
             ["Client", details.client || "—"],
           ],
           legal: [
-            brokerLegalName(entity) || brokerName,
+            brokerLegal,
             ...(entity.company_number ? [`Company number ${entity.company_number}`] : []),
             ...(entity.registered_office ? [`Registered office: ${entity.registered_office}`] : []),
           ],
@@ -279,6 +295,7 @@ export async function bakeEnvelope(envelopeId, { actor = "system" } = {}) {
             ["Prepared", envelope.prepared_on ? ukDate(envelope.prepared_on) : "—"],
             ["Doc ID", details.reference],
           ],
+          fill: coverFill,
         }
       );
       const indices = frontDoc.getPageIndices().slice(branded ? 1 : 0);
@@ -327,11 +344,14 @@ export async function bakeEnvelope(envelopeId, { actor = "system" } = {}) {
       if (brand.logo) {
         try {
           const logoImage = await embedLogoImage(bakedDoc, brand.logo);
+          const scale = Math.min(70 / logoImage.width, 28 / logoImage.height);
+          const width = logoImage.width * scale;
+          const height = logoImage.height * scale;
           firstContract.drawImage(logoImage, {
-            x: 480,
-            y: 780,
-            width: 70,
-            height: 28,
+            x: 550 - width,
+            y: 780 + (28 - height) / 2,
+            width,
+            height,
           });
         } catch {
           /* logo optional */
@@ -349,11 +369,17 @@ export async function bakeEnvelope(envelopeId, { actor = "system" } = {}) {
     }
 
     if (brand.back) {
-      await addBrandedBackCover(bakedDoc, brand.back, { font, bold, theme: packTheme(entity) }, {
-        name: brokerLegalName(entity),
-        companyNumber: entity.company_number || "",
-        registeredOffice: entity.registered_office || "",
-      });
+      await addBrandedBackCover(
+        bakedDoc,
+        brand.back,
+        { font, bold, theme: packTheme(entity) },
+        {
+          name: brokerLegalName(entity),
+          companyNumber: entity.company_number || "",
+          registeredOffice: entity.registered_office || "",
+        },
+        coverFill
+      );
     }
 
     const usesPack = ["three", "four"].includes(envelope.party_shape);

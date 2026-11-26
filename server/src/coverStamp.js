@@ -28,6 +28,30 @@ export function coverDetails(envelope, parties, entity, title) {
   };
 }
 
+/** Values for a template cover's placeholders ("[Reference]", "[the parties]", ...). */
+export function coverTokens(details, entity, { brokerLegal, document, prepared }) {
+  const four = details.version === "4-way";
+  return {
+    "Broker name": entity?.display_name || "",
+    "Legal name": entity?.legal_name || "",
+    "Company number": entity?.company_number || "",
+    "Registered office": entity?.registered_office || "",
+    "the parties": four
+      ? "the Client, the Contractor, the Supplier and the Broker"
+      : "the Client, the Contractor and the Broker",
+    Parties: four ? "Client · Contractor · Supplier · Broker" : "Client · Contractor · Broker",
+    "Party roles": four ? "Client, Contractor, Supplier & Broker" : "Client, Contractor & Broker",
+    Shape: four ? "Four-party" : "Three-party",
+    Reference: details.reference,
+    Prepared: prepared || "",
+    Document: document || "",
+    Client: details.client,
+    Contractor: details.contractor,
+    Supplier: details.supplier,
+    Broker: brokerLegal || entity?.display_name || "",
+  };
+}
+
 export function ukDate(value) {
   const match = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})/);
   return match ? `${match[3]}/${match[2]}/${match[1]}` : String(value || "");

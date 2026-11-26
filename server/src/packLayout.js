@@ -5,9 +5,11 @@ import {
   PDFEmbeddedPage,
   PDFName,
   PDFRawStream,
+  PDFTextField,
   decodePDFRawStream,
   degrees,
   rgb,
+  setCharacterSpacing,
 } from "pdf-lib";
 import { extractTextItems } from "./detectFields.js";
 import { readBytes } from "./storage.js";
@@ -124,10 +126,11 @@ export function packTheme(entity) {
   };
 }
 
-/** "UNION PAYROLL" style: first word bold, the rest regular. */
+/** "UNION PAYROLL" style: first word bold, the rest regular. A one-letter first word ("E STREET") stays with the next. */
 export function wordmarkParts(name) {
   const words = String(name || "").toUpperCase().split(/\s+/).filter(Boolean);
-  return words.length > 1 ? [words[0], words.slice(1).join(" ")] : words;
+  const lead = words.length > 2 && words[0].length === 1 ? 2 : 1;
+  return words.length > lead ? [words.slice(0, lead).join(" "), words.slice(lead).join(" ")] : [words.join(" ")].filter(Boolean);
 }
 
 /**
@@ -485,16 +488,200 @@ function drawTracked(page, text, { x, y, size, font, color, tracking }) {
   }
 }
 
+const CAP_HEIGHT = 0.718;
+const lineLead = (size) => (size >= 18 ? 1.03 : size >= 10 ? 1.58 : 1.45);
+
+/** One text run with character spacing, so the words still copy as words. */
+function drawSpaced(page, text, { tracking = 0, ...options }) {
+  if (tracking) page.pushOperators(setCharacterSpacing(tracking));
+  page.drawText(text, options);
+  if (tracking) page.pushOperators(setCharacterSpacing(0));
+}
+
+/**
+ * "[Reference]" style placeholders replaced from `tokens`. A " · " part whose placeholder
+ * has no value is dropped, so "Ref. [Reference] · Prepared [Prepared]" never ends "Prepared ".
+ */
+function fillTokens(text, tokens) {
+  return String(text ?? "")
+    .split("\n")
+    .map((line) => {
+      const parts = line.split(" · ");
+      return parts
+        .map((part) => {
+          let missing = false;
+          const filled = part.replace(/\[([^\]]+)\]/g, (_, key) => {
+            const value = String(tokens[key] ?? "").trim();
+            if (!value) missing = true;
+            return value;
+          });
+          return missing && parts.length > 1 ? "" : filled;
+        })
+        .filter((part) => part.trim())
+        .join(" · ")
+        .replace(/\s{2,}/g, " ")
+        .trim();
+    })
+    .join("\n");
+}
+
+function fieldStyle(field, { font, bold, theme }) {
+  const da = field.acroField.getDefaultAppearance() || "";
+  const tf = da.match(/\/(\S+)\s+([\d.]+)\s+Tf/);
+  const tc = da.match(/(-?[\d.]+)\s+Tc/);
+  const colour = da.match(/([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+rg/) || da.match(/([\d.]+)\s+g\b/);
+  const widget = field.acroField.getWidgets()[0];
+  const border = widget.getAppearanceCharacteristics()?.getBorderColor();
+  const size = Number(tf?.[2]) || 9;
+  return {
+    font: /bold/i.test(tf?.[1] || "") ? bold : font,
+    size,
+    spacing: (Number(tc?.[1]) || 0) / size,
+    color: colour ? rgb(Number(colour[1]), Number(colour[2] ?? colour[1]), Number(colour[3] ?? colour[1])) : theme.ink,
+    rule: border?.length === 3 ? rgb(...border) : theme.rule,
+    align: field.acroField.getQuadding() ?? 0,
+    multiline: field.isMultiline(),
+    rect: widget.getRectangle(),
+  };
+}
+
+function drawFieldText(page, text, template, style) {
+  const { rect, font, color, align } = style;
+  const value = packText(text);
+  const tracking = (size) => size * style.spacing;
+  const widthAt = (line, size) => trackedWidth(line, font, size, tracking(size));
+  const xFor = (line, size) =>
+    align === 2 ? rect.x + rect.width - widthAt(line, size) : align === 1 ? rect.x + (rect.width - widthAt(line, size)) / 2 : rect.x;
+  const draw = (line, size, y) => drawSpaced(page, line, { x: xFor(line, size), y, size, font, color, tracking: tracking(size) });
+
+  if (!style.multiline) {
+    let size = style.size;
+    const full = widthAt(value, size);
+    if (full > rect.width) size = Math.max(style.size * 0.6, (size * rect.width) / full);
+    let line = value;
+    while (line.length > 1 && widthAt(line, size) > rect.width) line = `${line.slice(0, -2).trimEnd()}…`;
+    draw(line, size, rect.y + (rect.height - size * CAP_HEIGHT) / 2);
+    return;
+  }
+  const factor = lineLead(style.size);
+  const address = template.trim() === "[Registered office]";
+  let size = style.size;
+  let lines;
+  for (;;) {
+    lines = address ? wrapAtCommas(value, font, size, rect.width) : wrapText(value, font, size, rect.width);
+    if (lines.length * size * factor <= rect.height + 0.5 || size <= style.size * 0.6) break;
+    size *= 0.95;
+  }
+  const step = size * factor;
+  const top = rect.y + rect.height;
+  lines.forEach((line, index) => draw(packText(line), size, top - (step + size * CAP_HEIGHT) / 2 - index * step));
+}
+
+/** The parties table: one row per [label, value, accent], labels small and spaced, a rule above and below each row. */
+function drawFieldRows(page, rows, style, { bold, theme }) {
+  const { rect, size } = style;
+  const pitch = rect.height / Math.max(6, rows.length);
+  const valueX = rect.x + rect.width * 0.32;
+  const valueW = rect.x + rect.width - valueX;
+  const labelSize = size * 0.72;
+  const rule = (y) => page.drawRectangle({ x: rect.x, y: y - 0.375, width: rect.width, height: 0.75, color: style.rule });
+  let top = rect.y + rect.height;
+  rule(top);
+  for (const [label, value, accent] of rows) {
+    const base = top - pitch * 0.556;
+    drawSpaced(page, packText(String(label).toUpperCase()), {
+      x: rect.x + 0.4,
+      y: base,
+      size: labelSize,
+      font: bold,
+      color: theme.muted,
+      tracking: labelSize * 0.12,
+    });
+    const color = accent ? theme.accent : style.color;
+    const text = packText(value || "—");
+    let valueSize = size;
+    const full = style.font.widthOfTextAtSize(text, size);
+    if (full > valueW) valueSize = Math.max(size * 0.78, (size * valueW) / full);
+    let lines = [text];
+    if (style.font.widthOfTextAtSize(text, valueSize) > valueW) {
+      lines = wrapText(text, style.font, valueSize, valueW);
+      while (lines.length > 2 && valueSize > size * 0.6) {
+        valueSize -= 0.2;
+        lines = wrapText(text, style.font, valueSize, valueW);
+      }
+      if (lines.length > 2) lines = [lines[0], `${lines[1]}…`];
+    }
+    const gap = valueSize * 1.2;
+    lines.forEach((line, index) => {
+      page.drawText(line, {
+        x: valueX,
+        y: base + ((lines.length - 1) / 2 - index) * gap,
+        size: valueSize,
+        font: style.font,
+        color,
+      });
+    });
+    top -= pitch;
+    rule(top);
+  }
+}
+
+/**
+ * A cover drawn as a template: named text fields mark where the contract's values go and the
+ * rest of the page is kept as it is. A field's own text may hold placeholders ("[Reference]");
+ * `fill.fields` replaces a field's text outright, and the `parties` field becomes a table of
+ * `fill.rows`. The fields are removed, so the result is a flat page. Returns the number of
+ * pages added (the first page only for a front cover), or 0 when the cover has no fields.
+ */
+async function addTemplateCover(out, bytes, fonts, fill = {}, { allPages = false } = {}) {
+  const src = await PDFDocument.load(bytes);
+  const fields = src.getForm().getFields().filter((field) => field instanceof PDFTextField);
+  if (!fields.length) return 0;
+  const pages = src.getPages();
+  const indices = allPages ? src.getPageIndices() : [0];
+  const widgetRefs = new Set();
+  const placed = fields.map((field) => {
+    const [ref, ...more] = field.acroField.getWidgets().map((widget) => src.context.getObjectRef(widget.dict));
+    [ref, ...more].forEach((item) => widgetRefs.add(item));
+    const pageIndex = pages.findIndex((page) => (page.node.Annots()?.asArray() || []).some((item) => item === ref));
+    return { name: field.getName(), template: field.getText() || "", style: fieldStyle(field, fonts), pageIndex };
+  });
+  for (const page of pages) {
+    const annots = page.node.Annots();
+    if (!annots) continue;
+    const kept = annots.asArray().filter((item) => !widgetRefs.has(item));
+    if (kept.length) page.node.set(PDFName.of("Annots"), src.context.obj(kept));
+    else page.node.delete(PDFName.of("Annots"));
+  }
+  src.catalog.delete(PDFName.of("AcroForm"));
+  const copies = await out.copyPages(src, indices);
+  copies.forEach((page) => out.addPage(page));
+
+  for (const item of placed) {
+    const at = indices.indexOf(item.pageIndex);
+    if (at < 0) continue;
+    if (item.name === "parties" && fill.rows?.length) {
+      drawFieldRows(copies[at], fill.rows, item.style, fonts);
+      continue;
+    }
+    const text = fillTokens(fill.fields?.[item.name] ?? item.template, fill.tokens || {});
+    if (text) drawFieldText(copies[at], text, item.template, item.style);
+  }
+  return copies.length;
+}
+
 /**
  * Builds a cover from the broker's front cover: the artwork stays, its own words are removed,
  * and the details are set where the cover's text blocks were. With no `content.title` the
- * cover's own title is kept. Returns false when the cover has no details panel to fill.
+ * cover's own title is kept. A cover with named fields is filled from `content.fill` instead
+ * (see addTemplateCover). Returns false when the cover has no details panel to fill.
  */
 export async function addBrandedCover(out, frontAsset, { font, bold, theme }, content) {
   if (!frontAsset) return false;
   const isPdf = (frontAsset.mime || "").includes("pdf") || frontAsset.storage_ref.endsWith(".pdf");
   if (!isPdf) return false;
   const bytes = readBytes(frontAsset.storage_ref);
+  if (await addTemplateCover(out, bytes, { font, bold, theme }, content.fill)) return true;
   const [first] = await extractTextItems(bytes);
   const items = first?.items || [];
   if (!items.length) return false;
@@ -805,9 +992,10 @@ function drawContactBlock(page, layout, legal, { font, bold, theme }) {
  * The broker's back cover with its artwork and banner words kept (a backtick becomes an
  * apostrophe in the cover's own font) and its contact block set again from the broker's
  * legal details, so it names the same company as the front cover. Covers whose layout is
- * not recognised are copied as they are. Returns the number of pages added.
+ * not recognised are copied as they are. A cover with named fields is filled from `fill`
+ * (see addTemplateCover). Returns the number of pages added.
  */
-export async function addBrandedBackCover(out, backAsset, fonts, legal) {
+export async function addBrandedBackCover(out, backAsset, fonts, legal, fill) {
   if (!backAsset) return 0;
   const bytes = readBytes(backAsset.storage_ref);
   const isPdf = (backAsset.mime || "").includes("pdf") || backAsset.storage_ref.endsWith(".pdf");
@@ -817,6 +1005,8 @@ export async function addBrandedBackCover(out, backAsset, fonts, legal) {
     page.drawImage(image, { x: 0, y: 0, width: PAGE.w, height: PAGE.h });
     return 1;
   }
+  const filled = await addTemplateCover(out, bytes, fonts, fill, { allPages: true });
+  if (filled) return filled;
   const copyAll = async (data) => {
     const src = await PDFDocument.load(data);
     const pages = await out.copyPages(src, src.getPageIndices());
