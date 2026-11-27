@@ -173,7 +173,8 @@ export function listAppendixFields(appendixId) {
     .all(appendixId);
 }
 
-export function snapshotEnvelopeFields(envelopeId, { contractPageOffset, masterPageMap = [], appendixStarts }) {
+/** `contractFields` stands in for the template's fields when the contract placed its own (a Word contract). */
+export function snapshotEnvelopeFields(envelopeId, { contractPageOffset, masterPageMap = [], appendixStarts, contractFields = null }) {
   db.prepare("DELETE FROM envelope_fields WHERE envelope_id = ?").run(envelopeId);
   const envelope = db.prepare("SELECT * FROM envelopes WHERE id = ?").get(envelopeId);
   const templateId =
@@ -190,9 +191,11 @@ export function snapshotEnvelopeFields(envelopeId, { contractPageOffset, masterP
     .all(templateId);
   const roleByKey = Object.fromEntries(roleRows.map((r) => [r.role_key, r.id]));
 
-  const masterFields = db
-    .prepare("SELECT * FROM template_fields WHERE template_id = ?")
-    .all(templateId);
+  const masterFields = contractFields
+    ? contractFields
+        .filter((field) => roleByKey[field.role_key])
+        .map((field) => ({ required: 1, ...field, role_id: roleByKey[field.role_key] }))
+    : db.prepare("SELECT * FROM template_fields WHERE template_id = ?").all(templateId);
   for (const field of masterFields) {
     db.prepare(
       `INSERT INTO envelope_fields (
@@ -271,7 +274,7 @@ function partyValueFor(label, party) {
  * Each party as its detail boxes are filled: the record's Companies House details stand in for a
  * missing registered office or number, and the broker is named by its own legal details.
  */
-function contractPartyDetails(envelopeId) {
+export function contractPartyDetails(envelopeId) {
   const envelope = db.prepare("SELECT entity_id FROM envelopes WHERE id = ?").get(envelopeId);
   const broker = envelope
     ? db

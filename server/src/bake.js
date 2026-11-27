@@ -6,6 +6,7 @@ import { appendEvent } from "./events.js";
 import { readBytes, writeBytes } from "./storage.js";
 import { snapshotEnvelopeFields, envelopePlacedFields, prefillPartyFields } from "./documentFields.js";
 import { PARTY_LABELS } from "./parties.js";
+import { buildWordContract } from "./wordContract.js";
 
 async function loadOrCreateSourcePdf(template) {
   let bytes;
@@ -153,7 +154,19 @@ export function getMasterTemplate({ includeInactive = false } = {}) {
   );
 }
 
-export async function bakeEnvelope(envelopeId, { actor = "system" } = {}) {
+/** `issuedOn` fills a Word contract's issue date; it is given when the contract is sent. */
+/** Word fields keep the same id across bakes, so values entered before a re-bake stay with their box. */
+function wordFieldIds(fields) {
+  const seen = new Map();
+  return fields.map((field) => {
+    const count = (seen.get(field.field_key) || 0) + 1;
+    seen.set(field.field_key, count);
+    return { ...field, id: `word-${field.field_key}${count > 1 ? `-${count}` : ""}` };
+  });
+}
+
+/** `issuedOn` fills a Word contract's issue date; it is given when the contract is sent. */
+export async function bakeEnvelope(envelopeId, { actor = "system", issuedOn = null } = {}) {
   const envelope = db.prepare("SELECT * FROM envelopes WHERE id = ?").get(envelopeId);
   if (!envelope)     throw new Error("Contract not found");
   if (!["draft", "baking", "ready"].includes(envelope.status)) {
@@ -205,7 +218,9 @@ export async function bakeEnvelope(envelopeId, { actor = "system" } = {}) {
       industry: envelope.industry || template.industry || null,
       appendixIds,
     });
-    const sourceBytes = await loadOrCreateSourcePdf(template);
+    // A Word contract is filled from the records and carries its own covers and signing boxes.
+    const word = Boolean(template.docx_ref);
+    const sourceBytes = word ? readBytes(template.docx_ref) : await loadOrCreateSourcePdf(template);
     const contentHash = sha256(sourceBytes);
 
     let version = db
@@ -217,7 +232,7 @@ export async function bakeEnvelope(envelopeId, { actor = "system" } = {}) {
     if (!version) {
       const snap = writeBytes(
         "snapshots",
-        `${template.id}-${contentHash.slice(0, 12)}.pdf`,
+        `${template.id}-${contentHash.slice(0, 12)}.${word ? "docx" : "pdf"}`,
         sourceBytes
       );
       const versionNo =
@@ -276,7 +291,10 @@ export async function bakeEnvelope(envelopeId, { actor = "system" } = {}) {
         ["Dated", "Date of last signature"],
       ],
     };
-    const frontDoc = await pdfFromAsset(brand.front);
+    const built = word
+      ? await buildWordContract({ envelope, template: { ...template, docx_ref: version.storage_ref }, entity, issuedOn })
+      : null;
+    const frontDoc = word ? null : await pdfFromAsset(brand.front);
     if (frontDoc) {
       const branded = await addBrandedCover(
         bakedDoc,
@@ -309,16 +327,24 @@ export async function bakeEnvelope(envelopeId, { actor = "system" } = {}) {
       if (!branded) stampCoverDetails(bakedDoc.getPages()[0], font, bold, details);
     }
 
-    const contractDoc = await PDFDocument.load(readBytes(version.storage_ref));
+    const contractDoc = await PDFDocument.load(word ? built.pdf : readBytes(version.storage_ref));
     const contractPages = await bakedDoc.copyPages(
       contractDoc,
       contractDoc.getPageIndices()
     );
     // People read the contract and its schedules, then sign: the contract's pages with
-    // signature fields come after the schedules, just before the back cover.
+    // signature fields come after the schedules, just before the back cover. A Word contract
+    // keeps its own back pages, so its schedules go in before its first signing page.
+    const contractFields = word ? built.fields : fields;
     const signingPages = new Set(
-      fields.filter((f) => f.field_type === "signature").map((f) => Number(f.page || 0))
+      contractFields.filter((f) => f.field_type === "signature").map((f) => Number(f.page || 0))
     );
+    if (word && signingPages.size) {
+      const first = Math.min(...signingPages);
+      contractPages.forEach((_, index) => {
+        if (index > first) signingPages.add(index);
+      });
+    }
     const masterPageMap = [];
     const placeContractPages = (wanted) =>
       contractPages.forEach((page, index) => {
@@ -371,7 +397,7 @@ export async function bakeEnvelope(envelopeId, { actor = "system" } = {}) {
       }
     }
 
-    if (brand.back) {
+    if (brand.back && !word) {
       await addBrandedBackCover(
         bakedDoc,
         brand.back,
@@ -402,6 +428,7 @@ export async function bakeEnvelope(envelopeId, { actor = "system" } = {}) {
       contractPageOffset,
       masterPageMap,
       appendixStarts,
+      contractFields: word ? wordFieldIds(built.fields) : null,
     });
     prefillPartyFields(envelopeId);
 
@@ -424,7 +451,7 @@ export async function bakeEnvelope(envelopeId, { actor = "system" } = {}) {
     const previewDoc = await PDFDocument.load(cleanBytes);
     const previewFont = await previewDoc.embedFont(StandardFonts.Helvetica);
     const previewPages = previewDoc.getPages();
-    if (previewPages[contractPageOffset]) stampContractDates(previewPages[contractPageOffset], previewFont, envelope);
+    if (!word && previewPages[contractPageOffset]) stampContractDates(previewPages[contractPageOffset], previewFont, envelope);
     const partyRoles = new Map(parties.map((party) => [party.role_id, PARTY_LABELS[party.role_key] || party.role_key]));
     for (const field of placedFields.filter((f) => partyRoles.has(f.role_id))) {
       // A contract's own labels ("Date:") rarely say whose box it is.
@@ -488,6 +515,7 @@ export async function bakeEnvelope(envelopeId, { actor = "system" } = {}) {
         contract_page_offset = ?,
         baked_dd_sha256 = ?,
         baked_clean_ref = ?,
+        word_contract = ?,
         bake_error = NULL
        WHERE id = ?`
     ).run(
@@ -503,6 +531,7 @@ export async function bakeEnvelope(envelopeId, { actor = "system" } = {}) {
       contractPageOffset,
       signedPack ? envelope.dd_sha256 : null,
       cleanFile.storageRef,
+      word ? 1 : 0,
       envelopeId
     );
 
@@ -530,6 +559,16 @@ export async function bakeEnvelope(envelopeId, { actor = "system" } = {}) {
     ).run(err.message || "Bake failed", envelopeId);
     throw err;
   }
+}
+
+/** At issue: a Word contract is filled again with its issue date; any other carries the pack as last signed. */
+export async function bakeForIssue(envelopeId, { actor = "staff", issuedOn }) {
+  const envelope = db.prepare("SELECT status, word_contract FROM envelopes WHERE id = ?").get(envelopeId);
+  if (envelope?.status === "ready" && envelope.word_contract) {
+    await bakeEnvelope(envelopeId, { actor, issuedOn });
+    return true;
+  }
+  return bakeInSignedPack(envelopeId, { actor });
 }
 
 /** The signed pack travels with the contract, so an issue must carry the pack as last signed. */

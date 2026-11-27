@@ -1,8 +1,10 @@
 import { db, newId, now } from "./db.js";
 import { getMasterTemplate } from "./bake.js";
-import { applyAppendixPdfFields, applyMasterPdfFields, listAppendixFields } from "./documentFields.js";
+import { applyAppendixPdfFields, applyMasterPdfFields, listAppendixFields, replaceTemplateFields } from "./documentFields.js";
+import { isWordFile } from "./docxTemplate.js";
 import { ensureSigningEvidence } from "./seed.js";
 import { writeBytes } from "./storage.js";
+import { previewWordTemplate, wordContractNeeds } from "./wordContract.js";
 
 /** The contracts a broker offers. Both 3-way types have the Contractor, Broker and Client; the 4-way adds the Supplier. */
 export const CONTRACT_TYPES = [
@@ -80,7 +82,9 @@ export function masterView(template) {
     contract_type: template.contract_type || null,
     entity_id: template.entity_id || null,
     is_placeholder: !template.entity_id,
-    file_name: fileName(template.source_url),
+    file_name: fileName(template.docx_ref || template.source_url),
+    is_word: Boolean(template.docx_ref),
+    needs: wordContractNeeds(template),
     roles: db
       .prepare("SELECT * FROM template_roles WHERE template_id = ? ORDER BY signing_order")
       .all(template.id),
@@ -124,34 +128,67 @@ export function brokerContracts(entityId) {
   };
 }
 
+/**
+ * A broker's contract of one type, as a PDF (fields found from its labels) or as a Word file filled
+ * per contract (fields from its {{sig.*}} merge fields; the PDF kept is its preview).
+ */
 export async function saveBrokerMaster(entityId, typeKey, file, { name, description } = {}) {
   const type = contractType(typeKey);
   const entity = requireBroker(entityId);
-  requirePdf(file);
-  const stored = writeBytes("uploads", `master-${type.key}-${Date.now()}-${file.originalname}`, file.buffer);
+  const word = isWordFile(file?.buffer || Buffer.alloc(0));
+  if (!word) requirePdf(file);
+  const stamp = `master-${type.key}-${Date.now()}`;
+  let sourceRef;
+  let docxRef = null;
+  let wordFields = null;
+  if (word) {
+    const preview = await previewWordTemplate(file.buffer);
+    const missing = ["company", "agency", "supplier"].filter(
+      (role) => !preview.fields.some((field) => field.role_key === role && field.field_type === "signature")
+    );
+    if (type.shape === "four" && !preview.fields.some((field) => field.role_key === "spv" && field.field_type === "signature")) {
+      missing.push("spv");
+    }
+    if (missing.length) {
+      const names = { company: "Client", agency: "Broker", supplier: "Contractor", spv: "Supplier" };
+      throw new Error(`This Word contract has no signature field for: ${missing.map((role) => names[role]).join(", ")}`);
+    }
+    docxRef = writeBytes("uploads", `${stamp}-${file.originalname}`, file.buffer).storageRef;
+    sourceRef = writeBytes("uploads", `${stamp}-preview.pdf`, preview.pdf).storageRef;
+    wordFields = preview.fields;
+  } else {
+    sourceRef = writeBytes("uploads", `${stamp}-${file.originalname}`, file.buffer).storageRef;
+  }
+  const applyFields = async (templateId, isNew) => {
+    if (!wordFields) return applyMasterPdfFields(templateId, file.buffer, { isNew });
+    replaceTemplateFields(templateId, wordFields);
+    return { found: wordFields.length, replaced: true };
+  };
   const existing = brokerMaster(entityId, type.key);
   if (existing) {
     db.prepare(
-      "UPDATE templates SET source_url = ?, name = COALESCE(?, name), description = COALESCE(?, description) WHERE id = ?"
-    ).run(`local://${stored.storageRef}`, name || null, description || null, existing.id);
-    await applyMasterPdfFields(existing.id, file.buffer, { isNew: false });
+      `UPDATE templates SET source_url = ?, docx_ref = ?, name = COALESCE(?, name),
+         description = COALESCE(?, description) WHERE id = ?`
+    ).run(`local://${sourceRef}`, docxRef, name || null, description || null, existing.id);
+    await applyFields(existing.id, false);
     return masterView(brokerMaster(entityId, type.key));
   }
   const id = newId();
   db.prepare(
     `INSERT INTO templates (
       id, entity_id, name, source_url, default_front_cover, default_back_cover,
-      is_active, created_at, industry, description, is_master, party_shape, contract_type
-    ) VALUES (?, ?, ?, ?, NULL, NULL, 1, ?, NULL, ?, 1, ?, ?)`
+      is_active, created_at, industry, description, is_master, party_shape, contract_type, docx_ref
+    ) VALUES (?, ?, ?, ?, NULL, NULL, 1, ?, NULL, ?, 1, ?, ?, ?)`
   ).run(
     id,
     entityId,
-    name || "Master Services Agreement",
-    `local://${stored.storageRef}`,
+    name || (word ? wordTitle(file.originalname) : "Master Services Agreement"),
+    `local://${sourceRef}`,
     now(),
     description || `${entity.display_name} ${type.label} contract`,
     type.shape,
-    type.key
+    type.key,
+    docxRef
   );
   for (const [key, label, order] of ROLES) {
     db.prepare(
@@ -160,8 +197,13 @@ export async function saveBrokerMaster(entityId, typeKey, file, { name, descript
     ).run(newId(), id, key, label, order);
   }
   ensureSigningEvidence();
-  await applyMasterPdfFields(id, file.buffer, { isNew: true });
+  await applyFields(id, true);
   return masterView(brokerMaster(entityId, type.key));
+}
+
+/** "Union_Payroll_TOB_2026_UN-HS_1.6.docx" → "Union Payroll TOB 2026 UN-HS 1.6". */
+function wordTitle(fileName) {
+  return String(fileName || "Contract").replace(/\.docx$/i, "").replace(/_/g, " ").trim() || "Contract";
 }
 
 export function updateBrokerMaster(entityId, typeKey, { name, description } = {}) {

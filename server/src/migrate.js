@@ -135,6 +135,11 @@ export function migrate() {
   ensureColumn("appendices", "contract_types", "TEXT");
   ensureColumn("templates", "contract_type", "TEXT");
   ensureColumn("envelopes", "contract_type", "TEXT");
+  // A broker contract uploaded as a Word file is filled per contract; source_url is then its preview PDF.
+  ensureColumn("templates", "docx_ref", "TEXT");
+  ensureColumn("envelopes", "word_contract", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn("envelopes", "contractor_fee", "TEXT");
+  ensureColumn("envelopes", "payment_models", "TEXT");
   // A 3-way contract made before 3-way lower and 3-way higher existed is 3-way lower.
   for (const table of ["templates", "envelopes"]) {
     db.exec(

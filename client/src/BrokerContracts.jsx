@@ -63,8 +63,8 @@ export default function BrokerContracts({ entityId, brokerName, heading = "Contr
     <section className="panel form-grid">
       <h2>{heading}</h2>
       <p className="muted">
-        One PDF for each contract type. Schedules are ticked when a contract is created. Signing fields are found in
-        each file.
+        One PDF or Word file for each contract type. A Word contract is filled from the records for each contract.
+        Schedules are ticked when a contract is created. Signing fields are found in each file.
       </p>
       {error ? <p className="error">{error}</p> : null}
       <div className="brand-slots template-slots">
@@ -183,9 +183,9 @@ function MasterSlot({ label, master, placeholder, fileUrl, busy, onUpload, onRen
       mime="application/pdf"
       present={Boolean(master)}
       previewUrl={master ? fileUrl : ""}
-      accept=".pdf,application/pdf"
+      accept=".pdf,application/pdf,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
       busy={busy}
-      uploadLabel="Upload PDF"
+      uploadLabel="Upload PDF or Word"
       emptyText={
         placeholder ? `Not uploaded. The placeholder (${placeholder.name}) is used until it is.` : "Not uploaded."
       }
@@ -206,6 +206,7 @@ function MasterSlot({ label, master, placeholder, fileUrl, busy, onUpload, onRen
           >
             Save name
           </button>
+          {master.is_word ? <p className="meta">Word contract, filled for each contract</p> : null}
           <FieldList fields={master.fields} roles={master.roles} empty="No signing fields found. Replace the PDF to try again." />
         </>
       ) : null}

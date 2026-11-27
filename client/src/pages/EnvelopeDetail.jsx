@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../api.js";
+import { EngagementFields } from "../EngagementFields.jsx";
 import SaveProgressBar from "../SaveProgressBar.jsx";
 
 export default function EnvelopeDetail() {
@@ -195,6 +196,9 @@ export default function EnvelopeDetail() {
           Void
         </button>
       </div>
+      {envelope.contract_needs?.length ? (
+        <ContractTerms envelope={envelope} busy={Boolean(busy)} onSave={(body) => run("terms", () => api.saveEngagement(id, body))} />
+      ) : null}
       {["draft", "ready"].includes(envelope.status) && signatureGaps.length ? (
         <section className="panel" style={{ marginBottom: "1.25rem" }}>
           <h2>Before sending</h2>
@@ -715,6 +719,27 @@ export default function EnvelopeDetail() {
 
 function sameDates(a, b) {
   return (a?.receivedOn || "") === (b?.receivedOn || "") && (a?.checkedOn || "") === (b?.checkedOn || "");
+}
+
+function ContractTerms({ envelope, busy, onSave }) {
+  const saved = { contractorFee: envelope.contractor_fee || "", paymentModels: envelope.payment_models || "" };
+  const [terms, setTerms] = useState(saved);
+  useEffect(() => {
+    setTerms({ contractorFee: envelope.contractor_fee || "", paymentModels: envelope.payment_models || "" });
+  }, [envelope.contractor_fee, envelope.payment_models]);
+  const editable = ["draft", "ready"].includes(envelope.status);
+  const changed = terms.contractorFee !== saved.contractorFee || terms.paymentModels !== saved.paymentModels;
+  return (
+    <section className="panel" style={{ marginBottom: "1.25rem" }}>
+      <h2>Terms</h2>
+      <EngagementFields needs={envelope.contract_needs} value={terms} onChange={setTerms} disabled={busy || !editable} />
+      {editable ? (
+        <button className="btn secondary" type="button" disabled={busy || !changed} onClick={() => onSave(terms)}>
+          {envelope.status === "ready" ? "Save and bake again" : "Save terms"}
+        </button>
+      ) : null}
+    </section>
+  );
 }
 
 function ukDay(iso) {

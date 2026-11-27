@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../api.js";
+import { EngagementFields } from "../EngagementFields.jsx";
 import { emptyParty, PartyFields } from "../PartyFields.jsx";
 
 function mergeParty(setter) {
@@ -38,6 +39,7 @@ export default function CreateEnvelope() {
   const [contractor, setContractor] = useState(emptyParty());
   const [client, setClient] = useState(emptyParty());
   const [supplier, setSupplier] = useState(emptyParty());
+  const [terms, setTerms] = useState({ contractorFee: "", paymentModels: "" });
 
   useEffect(() => {
     Promise.all([
@@ -75,6 +77,7 @@ export default function CreateEnvelope() {
   const contractFor = (choice) => contracts?.masters?.[choice] || contracts?.placeholder || null;
   const type = contracts?.types?.find((item) => item.key === typeKey) || null;
   const four = type?.shape === "four";
+  const needs = contractFor(typeKey)?.needs || [];
 
   const presetBrokerId = params.get("broker") || "";
   const brokerSetup = (entityId) => {
@@ -155,6 +158,8 @@ export default function CreateEnvelope() {
         contractType: typeKey,
         supplier: four ? supplier : null,
         appendixIds: scheduleIds,
+        contractorFee: needs.includes("contractor_fee") ? terms.contractorFee : undefined,
+        paymentModels: needs.includes("payment_models") ? terms.paymentModels : undefined,
       });
       navigate(`/envelopes/${envelope.id}`);
     } catch (err) {
@@ -352,6 +357,12 @@ export default function CreateEnvelope() {
                 The PAYE letter, the signature and the director ID are added on the supplier record. The Employers’
                 Liability documents naming the supplier are on the contractor record.
               </p>
+            </section>
+          ) : null}
+          {needs.length ? (
+            <section className="party-card">
+              <h3>Terms</h3>
+              <EngagementFields needs={needs} value={terms} onChange={setTerms} />
             </section>
           ) : null}
           <button className="btn" type="submit" disabled={busy}>

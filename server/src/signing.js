@@ -507,7 +507,9 @@ export async function finalizeEnvelope(envelopeId) {
   const pages = pdf.getPages();
   const placed = envelopePlacedFields(envelopeId);
   const pageOffset = Number(envelope.contract_page_offset || 0);
-  if (envelope.baked_clean_ref && pages[pageOffset]) stampContractDates(pages[pageOffset], font, envelope);
+  if (envelope.baked_clean_ref && !envelope.word_contract && pages[pageOffset]) {
+    stampContractDates(pages[pageOffset], font, envelope);
+  }
 
   const signatures = db
     .prepare("SELECT * FROM signatures WHERE envelope_id = ?")

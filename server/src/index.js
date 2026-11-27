@@ -7,6 +7,7 @@ import { db, newId, now, sha256, parseJson } from "./db.js";
 import { appendEvent } from "./events.js";
 import {
   bakeEnvelope,
+  bakeForIssue,
   bakeInSignedPack,
   resolveBrandPack,
   getMasterTemplate,
@@ -28,6 +29,8 @@ import {
 import { ensureSeed, ensureSigningEvidence } from "./seed.js";
 import { isPublicApi, login, logout, userFromRequest } from "./auth.js";
 import { lookupCompany } from "./companiesHouse.js";
+import { localDay } from "./ddChecks.js";
+import { missingEngagement, storedFee, storedPaymentModels, wordContractNeeds } from "./wordContract.js";
 import { readSignatureInput } from "./signatureInput.js";
 import {
   contractFromLibrary,
@@ -284,6 +287,7 @@ function getEnvelopeBundle(id) {
   return {
     ...envelope,
     contract_type_label: contractTypeLabel(envelope.contract_type),
+    contract_needs: wordContractNeeds(template),
     entity,
     template,
     parties,
@@ -1058,7 +1062,7 @@ app.get("/api/brokers/:entityId/contracts/:type/file", (req, res) => {
     const template = brokerContracts(req.params.entityId).masters[req.params.type];
     if (!template) return res.status(404).json({ error: "No contract uploaded" });
     const row = db.prepare("SELECT source_url FROM templates WHERE id = ?").get(template.id);
-    sendStoredPdf(res, row.source_url, template.file_name);
+    sendStoredPdf(res, row.source_url, template.file_name.replace(/\.docx$/i, ".pdf"));
   } catch (err) {
     res.status(404).json({ error: err.message });
   }
@@ -1227,6 +1231,12 @@ app.post("/api/envelopes", (req, res) => {
     if (!preparedOn || !/^\d{4}-\d{2}-\d{2}$/.test(preparedOn)) {
       return res.status(400).json({ error: "preparedOn (YYYY-MM-DD) is required" });
     }
+    const engagement = {
+      contractor_fee: storedFee(req.body?.contractorFee),
+      payment_models: storedPaymentModels(req.body?.paymentModels),
+    };
+    const missingTerms = missingEngagement(engagement, template);
+    if (missingTerms.length) return res.status(400).json({ error: `Enter ${missingTerms.join(" and ")}` });
     const selectedIndustry = null;
     const selectedAppendices = schedulesForContract(entityId, type.key, appendixIds);
     const requestedAppendixIds = selectedAppendices.map((a) => a.id);
@@ -1259,8 +1269,9 @@ app.post("/api/envelopes", (req, res) => {
       `INSERT INTO envelopes (
         id, entity_id, template_id, status, signing_mode, reminder_frequency, max_auto_reminders,
         external_client_ref, title, prepared_on, industry, front_cover_id, back_cover_id,
-        logo_asset_id, appendix_ids_json, created_by, created_at, party_shape, contract_type, is_sample
-      ) VALUES (?, ?, ?, 'draft', 'sequential', ?, 5, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        logo_asset_id, appendix_ids_json, created_by, created_at, party_shape, contract_type, is_sample,
+        contractor_fee, payment_models
+      ) VALUES (?, ?, ?, 'draft', 'sequential', ?, 5, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       envelopeId,
       entityId,
@@ -1278,7 +1289,9 @@ app.post("/api/envelopes", (req, res) => {
       now(),
       shape,
       type.key,
-      parties.some((party) => party.is_sample) ? 1 : 0
+      parties.some((party) => party.is_sample) ? 1 : 0,
+      engagement.contractor_fee,
+      engagement.payment_models
     );
 
     wanted.forEach((key, index) => {
@@ -1338,6 +1351,25 @@ app.post("/api/envelopes", (req, res) => {
   }
 });
 
+/** The contractor fee and payment models a Word contract prints; a contract already baked is baked again. */
+app.patch("/api/envelopes/:id/engagement", async (req, res) => {
+  try {
+    const envelope = db.prepare("SELECT * FROM envelopes WHERE id = ?").get(req.params.id);
+    if (!envelope) return res.status(404).json({ error: "Not found" });
+    if (!["draft", "ready"].includes(envelope.status)) throw new Error("These terms are fixed once the contract is sent");
+    const body = req.body || {};
+    db.prepare("UPDATE envelopes SET contractor_fee = ?, payment_models = ? WHERE id = ?").run(
+      body.contractorFee === undefined ? envelope.contractor_fee : storedFee(body.contractorFee),
+      body.paymentModels === undefined ? envelope.payment_models : storedPaymentModels(body.paymentModels),
+      envelope.id
+    );
+    if (envelope.status === "ready") await bakeEnvelope(envelope.id, { actor: "staff" });
+    res.json(getEnvelopeBundle(envelope.id));
+  } catch (err) {
+    res.status(400).json({ error: err.message || "Could not save the terms" });
+  }
+});
+
 app.post("/api/envelopes/:id/bake", async (req, res) => {
   try {
     await bakeEnvelope(req.params.id, { actor: "staff" });
@@ -1354,7 +1386,7 @@ app.post("/api/envelopes/:id/send", async (req, res) => {
     const gaps = savedSignatureGaps(req.params.id);
     if (gaps.length) throw new Error(gapMessage(gaps));
     const signingDates = signingDatesFor(req.params.id, req.body?.signingDates);
-    await bakeInSignedPack(req.params.id, { actor: "staff" });
+    await bakeForIssue(req.params.id, { actor: "staff", issuedOn: localDay() });
     const result = startSigningInvites(req.params.id, baseUrl, "staff", { signingDates });
     res.json({ ...getEnvelopeBundle(req.params.id), invite: result });
   } catch (err) {
