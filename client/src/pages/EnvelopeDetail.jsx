@@ -126,6 +126,7 @@ export default function EnvelopeDetail() {
         </h1>
         <p>
           {envelope.entity?.display_name} ·{" "}
+          {envelope.contract_type_label ? `${envelope.contract_type_label} · ` : null}
           <span className={`badge ${envelope.status}`}>{envelope.status}</span>
           {envelope.industry ? <span className="muted"> · {envelope.industry}</span> : null}
           {envelope.baked_hash ? (

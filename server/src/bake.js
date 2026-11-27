@@ -124,7 +124,7 @@ export function resolveBrandPack(entityId, { industry = null, appendixIds = [] }
   return { front, back, logo, industry: industry || null, appendices };
 }
 
-/** The shared placeholder contract, used for a broker that has no contract of its own for that shape. */
+/** The shared placeholder contract, used for a broker that has no contract of its own of that type. */
 export function getMasterTemplate({ includeInactive = false } = {}) {
   if (includeInactive) {
     return db

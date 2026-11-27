@@ -57,7 +57,7 @@ export default function Dashboard() {
                   {env.is_sample ? <span className="badge draft">Sample</span> : null}
                 </h3>
                 <div className="meta">
-                  {env.entity?.display_name || "Entity"} · {env.party_count} parties ·{" "}
+                  {env.entity?.display_name || "Entity"} · {env.contract_type_label || `${env.party_count} parties`} ·{" "}
                   {new Date(env.created_at).toLocaleString("en-GB")}
                 </div>
               </div>

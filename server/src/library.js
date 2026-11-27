@@ -1,7 +1,7 @@
 import { db, newId, now } from "./db.js";
 import { ensureStoredDateFields } from "./documentFields.js";
 import { resolveBrandPack } from "./bake.js";
-import { contractTemplateFor } from "./contractTemplates.js";
+import { CONTRACT_TYPES, contractTemplateFor } from "./contractTemplates.js";
 import { dropSignatureIfSignerChanged, signatureView } from "./savedSignatures.js";
 
 const ROLES = new Set(["director", "authorised_signatory"]);
@@ -215,13 +215,11 @@ export function contractFromLibrary(input) {
     asIncoming(saved.broker, "agency"),
     asIncoming(client, "company"),
   ];
-  let shape = "three";
   if (input.supplier) {
     const supplier = saveDirectoryParty(input.supplier, "supplier");
     parties.splice(1, 0, asIncoming(supplier, "spv"));
-    shape = "four";
   }
-  return { entityId: saved.entity_id, templateId: saved.template_id, parties, shape };
+  return { entityId: saved.entity_id, templateId: saved.template_id, parties };
 }
 
 export function saveLibraryTemplate(input) {
@@ -232,8 +230,8 @@ export function saveLibraryTemplate(input) {
   const broker = saveDirectoryParty({ ...input.broker, entityId: entity.id }, "broker");
   const contractor = saveDirectoryParty(input.contractor, "contractor");
   const coverEntityId = broker.entity_id || entity.id;
-  // The contract itself is chosen by broker and shape when a contract is created; this is a reference only.
-  const template = contractTemplateFor(coverEntityId, "three") || contractTemplateFor(coverEntityId, "four");
+  // The contract itself is chosen by broker and type when a contract is created; this is a reference only.
+  const template = CONTRACT_TYPES.map((type) => contractTemplateFor(coverEntityId, type.key)).find(Boolean);
   if (!template) throw new Error(`Upload a contract for ${entity.display_name} first`);
   ensureStoredDateFields(template.id);
   const id = newId();

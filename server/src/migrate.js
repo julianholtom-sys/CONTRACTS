@@ -132,6 +132,22 @@ export function migrate() {
     );
   `);
   ensureColumn("appendices", "party_shape", "TEXT");
+  ensureColumn("appendices", "contract_types", "TEXT");
+  ensureColumn("templates", "contract_type", "TEXT");
+  ensureColumn("envelopes", "contract_type", "TEXT");
+  // A 3-way contract made before 3-way lower and 3-way higher existed is 3-way lower.
+  for (const table of ["templates", "envelopes"]) {
+    db.exec(
+      `UPDATE ${table} SET contract_type = CASE party_shape WHEN 'four' THEN 'four' ELSE 'three_lower' END
+       WHERE contract_type IS NULL AND party_shape IN ('three', 'four')`
+    );
+  }
+  db.exec(
+    `UPDATE appendices
+     SET contract_types = CASE party_shape WHEN 'four' THEN 'four' ELSE 'three_lower,three_higher' END,
+         party_shape = NULL
+     WHERE party_shape IN ('three', 'four')`
+  );
 
   db.exec(`DROP TABLE IF EXISTS entity_documents`);
 

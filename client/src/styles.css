@@ -371,6 +371,18 @@ select {
   font-size: 0.92rem;
 }
 
+.used-on {
+  display: grid;
+  gap: 0.4rem;
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--ink-soft);
+}
+
+.used-on .consent {
+  font-weight: 500;
+}
+
 input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="hidden"]):not([type="button"]):not([type="submit"]):not([type="reset"]),
 textarea,
 select {

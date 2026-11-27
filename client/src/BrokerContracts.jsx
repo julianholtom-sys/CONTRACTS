@@ -3,17 +3,6 @@ import { api } from "./api.js";
 import ConfirmDialog from "./ConfirmDialog.jsx";
 import FileSlot from "./FileSlot.jsx";
 
-const SHAPES = [
-  ["three", "3-way contract"],
-  ["four", "4-way contract"],
-];
-
-const USED_ON = [
-  ["", "3-way and 4-way"],
-  ["three", "3-way only"],
-  ["four", "4-way only"],
-];
-
 const PARTY = {
   company: "Client",
   agency: "Broker",
@@ -26,7 +15,7 @@ export default function BrokerContracts({ entityId, brokerName, heading = "Contr
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
   const [adding, setAdding] = useState(false);
-  const [draft, setDraft] = useState({ name: "", shape: "" });
+  const [draft, setDraft] = useState({ name: "", types: null });
   const [pending, setPending] = useState(null);
 
   async function reload() {
@@ -53,7 +42,7 @@ export default function BrokerContracts({ entityId, brokerName, heading = "Contr
   async function confirmDelete() {
     if (!pending) return;
     await run("delete", async () => {
-      if (pending.shape) await api.deleteBrokerContract(entityId, pending.shape);
+      if (pending.type) await api.deleteBrokerContract(entityId, pending.type);
       else await api.deleteAppendix(pending.id);
       setPending(null);
     });
@@ -68,32 +57,34 @@ export default function BrokerContracts({ entityId, brokerName, heading = "Contr
     );
   }
 
+  const draftTypes = draft.types || data.types.map((type) => type.key);
+
   return (
     <section className="panel form-grid">
       <h2>{heading}</h2>
       <p className="muted">
-        A 3-way contract uses the 3-way PDF, a 4-way contract the 4-way PDF. Schedules are ticked when a contract is
-        created. Signing fields are found in each file.
+        One PDF for each contract type. Schedules are ticked when a contract is created. Signing fields are found in
+        each file.
       </p>
       {error ? <p className="error">{error}</p> : null}
       <div className="brand-slots template-slots">
-        {SHAPES.map(([shape, label]) => (
+        {data.types.map((type) => (
           <MasterSlot
-            key={shape}
-            label={label}
-            master={data.masters[shape]}
+            key={type.key}
+            label={`${type.label} contract`}
+            master={data.masters[type.key]}
             placeholder={data.placeholder}
-            fileUrl={api.brokerContractFileUrl(entityId, shape)}
+            fileUrl={api.brokerContractFileUrl(entityId, type.key)}
             busy={Boolean(busy)}
             onUpload={(file, name) =>
-              run(`upload-${shape}`, () =>
-                api.uploadBrokerContract(entityId, shape, file, {
-                  name: name || data.masters[shape]?.name || "Master Services Agreement",
+              run(`upload-${type.key}`, () =>
+                api.uploadBrokerContract(entityId, type.key, file, {
+                  name: name || data.masters[type.key]?.name || "Master Services Agreement",
                 })
               )
             }
-            onRename={(name) => run(`name-${shape}`, () => api.updateBrokerContract(entityId, shape, { name }))}
-            onDelete={() => setPending({ shape, name: `${brokerName}’s ${label}` })}
+            onRename={(name) => run(`name-${type.key}`, () => api.updateBrokerContract(entityId, type.key, { name }))}
+            onDelete={() => setPending({ type: type.key, name: `${brokerName}’s ${type.label} contract` })}
           />
         ))}
       </div>
@@ -115,16 +106,11 @@ export default function BrokerContracts({ entityId, brokerName, heading = "Contr
                 placeholder="Schedule 1: Assignment details"
               />
             </label>
-            <label>
-              Used on
-              <select value={draft.shape} onChange={(e) => setDraft((d) => ({ ...d, shape: e.target.value }))}>
-                {USED_ON.map(([value, text]) => (
-                  <option key={value} value={value}>
-                    {text}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <UsedOn
+              types={data.types}
+              value={draftTypes}
+              onChange={(types) => setDraft((d) => ({ ...d, types }))}
+            />
           </div>
           <div className="toolbar" style={{ margin: 0 }}>
             <button className="btn secondary" type="button" onClick={() => setAdding(false)}>
@@ -132,12 +118,12 @@ export default function BrokerContracts({ entityId, brokerName, heading = "Contr
             </button>
             <FilePickerButton
               className="btn"
-              disabled={Boolean(busy) || !draft.name.trim()}
+              disabled={Boolean(busy) || !draft.name.trim() || !draftTypes.length}
               label="Upload PDF"
               onFile={(file) =>
                 run("add-schedule", async () => {
-                  await api.addSchedule(entityId, { ...draft, file });
-                  setDraft({ name: "", shape: draft.shape });
+                  await api.addSchedule(entityId, { name: draft.name, types: draftTypes, file });
+                  setDraft({ name: "", types: draftTypes });
                   setAdding(false);
                 })
               }
@@ -151,6 +137,7 @@ export default function BrokerContracts({ entityId, brokerName, heading = "Contr
             <ScheduleSlot
               key={schedule.id}
               schedule={schedule}
+              types={data.types}
               busy={Boolean(busy)}
               onSave={(body) => run(`save-${schedule.id}`, () => api.updateAppendix(schedule.id, body))}
               onReplace={(file) => run(`file-${schedule.id}`, () => api.uploadAppendixFile(schedule.id, file))}
@@ -166,13 +153,13 @@ export default function BrokerContracts({ entityId, brokerName, heading = "Contr
         <ConfirmDialog
           title="Are you sure?"
           message={
-            pending.shape
+            pending.type
               ? `Delete ${pending.name}? ${
-                  data.placeholder ? "New contracts of this shape will use the placeholder until another is uploaded." : "New contracts of this shape cannot be created until another is uploaded."
+                  data.placeholder ? "New contracts of this type will use the placeholder until another is uploaded." : "New contracts of this type cannot be created until another is uploaded."
                 } Existing contracts stay on file.`
               : `Delete ${pending.name}? Existing contracts stay on file.`
           }
-          confirmLabel={pending.shape ? "Yes, delete contract" : "Yes, delete schedule"}
+          confirmLabel={pending.type ? "Yes, delete contract" : "Yes, delete schedule"}
           busy={Boolean(busy)}
           onCancel={() => (busy ? null : setPending(null))}
           onConfirm={confirmDelete}
@@ -226,14 +213,38 @@ function MasterSlot({ label, master, placeholder, fileUrl, busy, onUpload, onRen
   );
 }
 
-function ScheduleSlot({ schedule, busy, onSave, onReplace, onDelete }) {
-  const [form, setForm] = useState({ name: schedule.name, shape: schedule.party_shape || "" });
+function UsedOn({ types, value, onChange }) {
+  return (
+    <div className="used-on">
+      Used on
+      {types.map((type) => (
+        <label key={type.key} className="consent">
+          <input
+            type="checkbox"
+            checked={value.includes(type.key)}
+            onChange={(e) =>
+              onChange(
+                types
+                  .map((item) => item.key)
+                  .filter((key) => (key === type.key ? e.target.checked : value.includes(key)))
+              )
+            }
+          />
+          <span>{type.label}</span>
+        </label>
+      ))}
+    </div>
+  );
+}
+
+function ScheduleSlot({ schedule, types, busy, onSave, onReplace, onDelete }) {
+  const [form, setForm] = useState({ name: schedule.name, types: schedule.contract_types });
 
   useEffect(() => {
-    setForm({ name: schedule.name, shape: schedule.party_shape || "" });
+    setForm({ name: schedule.name, types: schedule.contract_types });
   }, [schedule]);
 
-  const changed = form.name.trim() !== schedule.name || form.shape !== (schedule.party_shape || "");
+  const changed = form.name.trim() !== schedule.name || form.types.join() !== schedule.contract_types.join();
 
   return (
     <FileSlot
@@ -251,21 +262,12 @@ function ScheduleSlot({ schedule, busy, onSave, onReplace, onDelete }) {
         Name
         <input value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
       </label>
-      <label>
-        Used on
-        <select value={form.shape} onChange={(e) => setForm((f) => ({ ...f, shape: e.target.value }))}>
-          {USED_ON.map(([value, text]) => (
-            <option key={value} value={value}>
-              {text}
-            </option>
-          ))}
-        </select>
-      </label>
+      <UsedOn types={types} value={form.types} onChange={(next) => setForm((f) => ({ ...f, types: next }))} />
       <button
         className="btn secondary"
         type="button"
-        disabled={busy || !changed || !form.name.trim()}
-        onClick={() => onSave({ name: form.name.trim(), shape: form.shape })}
+        disabled={busy || !changed || !form.name.trim() || !form.types.length}
+        onClick={() => onSave({ name: form.name.trim(), types: form.types })}
       >
         Save details
       </button>

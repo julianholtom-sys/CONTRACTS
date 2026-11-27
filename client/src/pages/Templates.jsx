@@ -41,7 +41,7 @@ export default function Templates() {
     <div>
       <section className="hero-panel">
         <h1>Templates</h1>
-        <p>Each broker has a 3-way contract, a 4-way contract and its own schedules.</p>
+        <p>Each broker has a 3-way lower, a 3-way higher and a 4-way contract, and its own schedules.</p>
       </section>
       {error ? <p className="error">{error}</p> : null}
 

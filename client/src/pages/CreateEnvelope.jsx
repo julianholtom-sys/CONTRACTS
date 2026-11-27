@@ -34,7 +34,7 @@ export default function CreateEnvelope() {
   const [libraryItem, setLibraryItem] = useState(null);
   const [contracts, setContracts] = useState(null);
   const [scheduleIds, setScheduleIds] = useState([]);
-  const [shape, setShape] = useState("");
+  const [typeKey, setTypeKey] = useState("");
   const [contractor, setContractor] = useState(emptyParty());
   const [client, setClient] = useState(emptyParty());
   const [supplier, setSupplier] = useState(emptyParty());
@@ -71,9 +71,10 @@ export default function CreateEnvelope() {
       .catch((err) => setError(err.message));
   }, [contractEntityId]);
 
-  const schedulesFor = (choice) =>
-    (contracts?.schedules || []).filter((item) => !item.party_shape || item.party_shape === choice);
+  const schedulesFor = (choice) => (contracts?.schedules || []).filter((item) => item.contract_types.includes(choice));
   const contractFor = (choice) => contracts?.masters?.[choice] || contracts?.placeholder || null;
+  const type = contracts?.types?.find((item) => item.key === typeKey) || null;
+  const four = type?.shape === "four";
 
   const presetBrokerId = params.get("broker") || "";
   const brokerSetup = (entityId) => {
@@ -92,14 +93,14 @@ export default function CreateEnvelope() {
 
   const steps =
     mode === "library"
-      ? ["Library", "3-way or 4-way", "Schedules", "Other parties"]
-      : ["Broker", "3-way or 4-way", "Schedules", "Other parties"];
-  const onShape = step === 1;
+      ? ["Library", "Contract type", "Schedules", "Other parties"]
+      : ["Broker", "Contract type", "Schedules", "Other parties"];
+  const onType = step === 1;
   const onSchedules = step === 2;
   const onParties = step === steps.length - 1;
 
-  function chooseShape(choice) {
-    setShape(choice);
+  function chooseType(choice) {
+    setTypeKey(choice);
     setScheduleIds(schedulesFor(choice).map((item) => item.id));
     setStep(2);
   }
@@ -151,7 +152,8 @@ export default function CreateEnvelope() {
         title: client.company_name,
         preparedOn: todayISO(),
         client,
-        supplier: shape === "four" ? supplier : null,
+        contractType: typeKey,
+        supplier: four ? supplier : null,
         appendixIds: scheduleIds,
       });
       navigate(`/envelopes/${envelope.id}`);
@@ -241,30 +243,27 @@ export default function CreateEnvelope() {
         </div>
       ) : null}
 
-      {onShape ? (
+      {onType ? (
         contracts ? (
           <>
           <div className="choice-grid">
-            {[
-              ["three", "3-way", "Contractor, broker and client. This is the usual contract."],
-              ["four", "4-way", "Those three, plus a supplier."],
-            ].map(([choice, label, text]) => {
-              const contract = contractFor(choice);
+            {contracts.types.map((item) => {
+              const contract = contractFor(item.key);
               return (
                 <button
-                  key={choice}
+                  key={item.key}
                   type="button"
                   className="choice-card"
                   disabled={!contract}
-                  onClick={() => chooseShape(choice)}
+                  onClick={() => chooseType(item.key)}
                 >
-                  <strong>{label}</strong>
-                  <span>{text}</span>
+                  <strong>{item.label}</strong>
+                  <span>{item.shape === "four" ? "Contractor, supplier, broker and client." : "Contractor, broker and client."}</span>
                   <span className={contract?.is_placeholder || !contract ? "error" : "meta"}>
                     {!contract
-                      ? `No ${label} contract uploaded for this broker`
+                      ? `No ${item.label} contract uploaded for this broker`
                       : contract.is_placeholder
-                        ? `No ${label} contract uploaded for this broker yet: uses the placeholder`
+                        ? `No ${item.label} contract uploaded for this broker yet: uses the placeholder`
                         : contract.name}
                   </span>
                 </button>
@@ -282,8 +281,8 @@ export default function CreateEnvelope() {
 
       {onSchedules ? (
         <div className="panel form-grid">
-          {schedulesFor(shape).length ? (
-            schedulesFor(shape).map((item) => (
+          {schedulesFor(typeKey).length ? (
+            schedulesFor(typeKey).map((item) => (
               <label key={item.id} className="consent">
                 <input
                   type="checkbox"
@@ -299,7 +298,7 @@ export default function CreateEnvelope() {
             ))
           ) : (
             <p className="muted">
-              This broker has no {shape === "four" ? "4-way" : "3-way"} schedules.{" "}
+              This broker has no {type?.label} schedules.{" "}
               <Link to={`/brokers/${contractEntityId}`}>Add one</Link>
             </p>
           )}
@@ -340,7 +339,7 @@ export default function CreateEnvelope() {
               director ID when signing.
             </p>
           </section>
-          {shape === "four" ? (
+          {four ? (
             <section className="party-card">
               <h3>Supplier</h3>
               <PartyFields
@@ -366,7 +365,7 @@ export default function CreateEnvelope() {
 
 function heading(mode, step) {
   if (mode === "library") {
-    return ["Which library template?", "Is this 3-way or 4-way?", "Which schedules?", "Who else signs?"][step];
+    return ["Which library template?", "Which type of contract?", "Which schedules?", "Who else signs?"][step];
   }
-  return ["Which broker?", "Is this 3-way or 4-way?", "Which schedules?", "Who else signs?"][step];
+  return ["Which broker?", "Which type of contract?", "Which schedules?", "Who else signs?"][step];
 }

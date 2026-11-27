@@ -168,25 +168,25 @@ export const api = {
     return request("/api/templates/master/file", { method: "POST", body });
   },
   brokerContracts: (entityId) => request(`/api/brokers/${entityId}/contracts`),
-  uploadBrokerContract: (entityId, shape, file, { name } = {}) => {
+  uploadBrokerContract: (entityId, type, file, { name } = {}) => {
     const body = new FormData();
     if (name) body.append("name", name);
     body.append("file", file);
-    return request(`/api/brokers/${entityId}/contracts/${shape}/file`, { method: "POST", body });
+    return request(`/api/brokers/${entityId}/contracts/${type}/file`, { method: "POST", body });
   },
-  updateBrokerContract: (entityId, shape, body) =>
-    request(`/api/brokers/${entityId}/contracts/${shape}`, {
+  updateBrokerContract: (entityId, type, body) =>
+    request(`/api/brokers/${entityId}/contracts/${type}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }),
-  deleteBrokerContract: (entityId, shape) =>
-    request(`/api/brokers/${entityId}/contracts/${shape}`, { method: "DELETE" }),
-  brokerContractFileUrl: (entityId, shape) => `/api/brokers/${entityId}/contracts/${shape}/file`,
-  addSchedule: (entityId, { name, shape, file }) => {
+  deleteBrokerContract: (entityId, type) =>
+    request(`/api/brokers/${entityId}/contracts/${type}`, { method: "DELETE" }),
+  brokerContractFileUrl: (entityId, type) => `/api/brokers/${entityId}/contracts/${type}/file`,
+  addSchedule: (entityId, { name, types, file }) => {
     const body = new FormData();
     body.append("name", name);
-    if (shape) body.append("shape", shape);
+    body.append("types", types.join(","));
     body.append("file", file);
     return request(`/api/brokers/${entityId}/schedules`, { method: "POST", body });
   },

@@ -91,10 +91,12 @@ import {
   addSchedule,
   brokerContracts,
   contractTemplateFor,
+  contractType,
+  contractTypeLabel,
   deleteBrokerMaster,
   saveBrokerMaster,
-  scheduleShape,
   schedulesForContract,
+  storedScheduleTypes,
   updateBrokerMaster,
 } from "./contractTemplates.js";
 
@@ -281,6 +283,7 @@ function getEnvelopeBundle(id) {
     : brand.logo;
   return {
     ...envelope,
+    contract_type_label: contractTypeLabel(envelope.contract_type),
     entity,
     template,
     parties,
@@ -1029,10 +1032,10 @@ app.get("/api/brokers/:entityId/contracts", (req, res) => {
   }
 });
 
-app.post("/api/brokers/:entityId/contracts/:shape/file", upload.single("file"), async (req, res) => {
+app.post("/api/brokers/:entityId/contracts/:type/file", upload.single("file"), async (req, res) => {
   try {
     res.json(
-      await saveBrokerMaster(req.params.entityId, req.params.shape, req.file, {
+      await saveBrokerMaster(req.params.entityId, req.params.type, req.file, {
         name: req.body?.name,
         description: req.body?.description,
       })
@@ -1042,17 +1045,17 @@ app.post("/api/brokers/:entityId/contracts/:shape/file", upload.single("file"), 
   }
 });
 
-app.patch("/api/brokers/:entityId/contracts/:shape", (req, res) => {
+app.patch("/api/brokers/:entityId/contracts/:type", (req, res) => {
   try {
-    res.json(updateBrokerMaster(req.params.entityId, req.params.shape, req.body || {}));
+    res.json(updateBrokerMaster(req.params.entityId, req.params.type, req.body || {}));
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
 });
 
-app.get("/api/brokers/:entityId/contracts/:shape/file", (req, res) => {
+app.get("/api/brokers/:entityId/contracts/:type/file", (req, res) => {
   try {
-    const template = brokerContracts(req.params.entityId).masters[req.params.shape];
+    const template = brokerContracts(req.params.entityId).masters[req.params.type];
     if (!template) return res.status(404).json({ error: "No contract uploaded" });
     const row = db.prepare("SELECT source_url FROM templates WHERE id = ?").get(template.id);
     sendStoredPdf(res, row.source_url, template.file_name);
@@ -1061,9 +1064,9 @@ app.get("/api/brokers/:entityId/contracts/:shape/file", (req, res) => {
   }
 });
 
-app.delete("/api/brokers/:entityId/contracts/:shape", (req, res) => {
+app.delete("/api/brokers/:entityId/contracts/:type", (req, res) => {
   try {
-    deleteBrokerMaster(req.params.entityId, req.params.shape);
+    deleteBrokerMaster(req.params.entityId, req.params.type);
     res.status(204).end();
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -1075,7 +1078,7 @@ app.post("/api/brokers/:entityId/schedules", upload.single("file"), async (req, 
     res.status(201).json(
       await addSchedule(
         req.params.entityId,
-        { name: req.body?.name, description: req.body?.description, shape: req.body?.shape },
+        { name: req.body?.name, description: req.body?.description, types: req.body?.types },
         req.file
       )
     );
@@ -1105,17 +1108,23 @@ app.patch("/api/appendices/:id", (req, res) => {
   const body = req.body || {};
   const name = body.name === undefined ? row.name : String(body.name).trim();
   if (!name) return res.status(400).json({ error: "Give the schedule a name" });
+  let contractTypes = row.contract_types;
+  try {
+    if (body.types !== undefined) contractTypes = storedScheduleTypes(body.types);
+  } catch (err) {
+    return res.status(400).json({ error: err.message });
+  }
   db.prepare(
     `UPDATE appendices SET
       name = ?,
       description = ?,
-      party_shape = ?,
+      contract_types = ?,
       is_active = ?
      WHERE id = ?`
   ).run(
     name,
     body.description ?? row.description,
-    body.shape === undefined ? row.party_shape : scheduleShape(body.shape),
+    contractTypes,
     body.is_active === undefined ? row.is_active : body.is_active ? 1 : 0,
     row.id
   );
@@ -1171,7 +1180,7 @@ app.get("/api/envelopes", (_req, res) => {
       const parties = db
         .prepare("SELECT status, role_id FROM envelope_parties WHERE envelope_id = ?")
         .all(e.id);
-      return { ...e, entity, party_count: parties.length, parties };
+      return { ...e, contract_type_label: contractTypeLabel(e.contract_type), entity, party_count: parties.length, parties };
     });
   res.json(rows);
 });
@@ -1193,28 +1202,33 @@ app.post("/api/envelopes", (req, res) => {
       parties,
       reminderFrequency = "none",
     } = req.body || {};
-    let shape = req.body?.shape === "four" ? "four" : "three";
+    const type = contractType(req.body?.contractType);
+    const shape = type.shape;
     if (req.body?.libraryId) {
+      if ((shape === "four") !== Boolean(req.body.supplier)) {
+        return res.status(400).json({
+          error: shape === "four" ? "A 4-way contract needs a supplier" : `A ${type.label} contract has no supplier`,
+        });
+      }
       const built = contractFromLibrary(req.body);
       entityId = built.entityId;
       parties = built.parties;
-      shape = built.shape;
     }
     const entity = db
       .prepare("SELECT * FROM entities WHERE id = ? AND is_active = 1")
       .get(entityId);
     if (!entity) return res.status(400).json({ error: "Unknown entity" });
-    const template = contractTemplateFor(entityId, shape);
+    const template = contractTemplateFor(entityId, type.key);
     if (!template) {
       return res.status(400).json({
-        error: `Upload a ${shape === "four" ? "4-way" : "3-way"} contract for ${entity.display_name} first`,
+        error: `Upload a ${type.label} contract for ${entity.display_name} first`,
       });
     }
     if (!preparedOn || !/^\d{4}-\d{2}-\d{2}$/.test(preparedOn)) {
       return res.status(400).json({ error: "preparedOn (YYYY-MM-DD) is required" });
     }
     const selectedIndustry = null;
-    const selectedAppendices = schedulesForContract(entityId, shape, appendixIds);
+    const selectedAppendices = schedulesForContract(entityId, type.key, appendixIds);
     const requestedAppendixIds = selectedAppendices.map((a) => a.id);
     const brand = resolveBrandPack(entityId, {
       industry: selectedIndustry,
@@ -1245,8 +1259,8 @@ app.post("/api/envelopes", (req, res) => {
       `INSERT INTO envelopes (
         id, entity_id, template_id, status, signing_mode, reminder_frequency, max_auto_reminders,
         external_client_ref, title, prepared_on, industry, front_cover_id, back_cover_id,
-        logo_asset_id, appendix_ids_json, created_by, created_at, party_shape, is_sample
-      ) VALUES (?, ?, ?, 'draft', 'sequential', ?, 5, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        logo_asset_id, appendix_ids_json, created_by, created_at, party_shape, contract_type, is_sample
+      ) VALUES (?, ?, ?, 'draft', 'sequential', ?, 5, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       envelopeId,
       entityId,
@@ -1263,6 +1277,7 @@ app.post("/api/envelopes", (req, res) => {
       user?.id || null,
       now(),
       shape,
+      type.key,
       parties.some((party) => party.is_sample) ? 1 : 0
     );
 
@@ -1313,6 +1328,7 @@ app.post("/api/envelopes", (req, res) => {
         auto_logo_asset_id: brand.logo?.id || null,
         appendix_ids: selectedAppendices.map((a) => a.id),
         party_shape: shape,
+        contract_type: type.key,
       },
     });
 

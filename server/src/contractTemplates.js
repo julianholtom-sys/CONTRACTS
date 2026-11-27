@@ -4,8 +4,14 @@ import { applyAppendixPdfFields, applyMasterPdfFields, listAppendixFields } from
 import { ensureSigningEvidence } from "./seed.js";
 import { writeBytes } from "./storage.js";
 
-export const SHAPES = ["three", "four"];
-const SHAPE_LABEL = { three: "3-way", four: "4-way" };
+/** The contracts a broker offers. Both 3-way types have the Contractor, Broker and Client; the 4-way adds the Supplier. */
+export const CONTRACT_TYPES = [
+  { key: "three_lower", label: "3-way lower", shape: "three" },
+  { key: "three_higher", label: "3-way higher", shape: "three" },
+  { key: "four", label: "4-way", shape: "four" },
+];
+const TYPE_BY_KEY = Object.fromEntries(CONTRACT_TYPES.map((type) => [type.key, type]));
+const ALL_TYPES = CONTRACT_TYPES.map((type) => type.key);
 
 const ROLES = [
   ["supplier", "Contractor", 1],
@@ -14,13 +20,22 @@ const ROLES = [
   ["company", "Client", 4],
 ];
 
-function assertShape(shape) {
-  if (!SHAPES.includes(shape)) throw new Error("Choose 3-way or 4-way");
+export function contractTypeLabel(key) {
+  return TYPE_BY_KEY[key]?.label || "";
 }
 
-/** "three", "four", or null for a schedule used on both. */
-export function scheduleShape(value) {
-  return SHAPES.includes(value) ? value : null;
+export function contractType(key) {
+  const type = TYPE_BY_KEY[key];
+  if (!type) throw new Error("Choose 3-way lower, 3-way higher or 4-way");
+  return type;
+}
+
+/** The types a schedule is used on, as stored: null when it is used on every type. */
+export function storedScheduleTypes(value) {
+  const listed = Array.isArray(value) ? value : String(value ?? "").split(",");
+  const keys = ALL_TYPES.filter((key) => listed.map((item) => String(item).trim()).includes(key));
+  if (!keys.length) throw new Error("Tick at least one contract type for this schedule");
+  return keys.length === ALL_TYPES.length ? null : keys.join(",");
 }
 
 function requireBroker(entityId) {
@@ -38,21 +53,21 @@ function fileName(ref) {
   return String(ref || "").replace(/^local:\/\//, "").split(/[/\\]/).pop() || "";
 }
 
-export function brokerMaster(entityId, shape) {
+export function brokerMaster(entityId, typeKey) {
   return (
     db
       .prepare(
         `SELECT * FROM templates
-         WHERE is_master = 1 AND is_active = 1 AND entity_id = ? AND party_shape = ?
+         WHERE is_master = 1 AND is_active = 1 AND entity_id = ? AND contract_type = ?
          ORDER BY created_at DESC LIMIT 1`
       )
-      .get(entityId, shape) || null
+      .get(entityId, typeKey) || null
   );
 }
 
-/** The broker's own contract for that shape, or the shared placeholder until one is uploaded. */
-export function contractTemplateFor(entityId, shape) {
-  return brokerMaster(entityId, shape) || getMasterTemplate() || null;
+/** The broker's own contract of that type, or the shared placeholder until one is uploaded. */
+export function contractTemplateFor(entityId, typeKey) {
+  return brokerMaster(entityId, typeKey) || getMasterTemplate() || null;
 }
 
 export function masterView(template) {
@@ -62,6 +77,7 @@ export function masterView(template) {
     name: template.name,
     description: template.description || "",
     party_shape: template.party_shape || null,
+    contract_type: template.contract_type || null,
     entity_id: template.entity_id || null,
     is_placeholder: !template.entity_id,
     file_name: fileName(template.source_url),
@@ -72,15 +88,15 @@ export function masterView(template) {
   };
 }
 
-export function brokerSchedules(entityId, shape = null) {
+export function brokerSchedules(entityId, typeKey = null) {
   return db
     .prepare(
       `SELECT * FROM appendices
        WHERE is_active = 1 AND entity_id = ?
-         AND (? IS NULL OR party_shape IS NULL OR party_shape = ?)
+         AND (? IS NULL OR contract_types IS NULL OR instr(',' || contract_types || ',', ',' || ? || ',') > 0)
        ORDER BY name`
     )
-    .all(entityId, shape, shape);
+    .all(entityId, typeKey, typeKey);
 }
 
 export function scheduleView(row) {
@@ -90,7 +106,7 @@ export function scheduleView(row) {
     entity_id: row.entity_id,
     name: row.name,
     description: row.description || "",
-    party_shape: row.party_shape || null,
+    contract_types: row.contract_types ? row.contract_types.split(",") : ALL_TYPES,
     file_name: fileName(row.storage_ref),
     fields,
     needs_signing: fields.length > 0,
@@ -101,39 +117,41 @@ export function brokerContracts(entityId) {
   requireBroker(entityId);
   return {
     entity_id: entityId,
-    masters: Object.fromEntries(SHAPES.map((shape) => [shape, masterView(brokerMaster(entityId, shape))])),
+    types: CONTRACT_TYPES,
+    masters: Object.fromEntries(CONTRACT_TYPES.map((type) => [type.key, masterView(brokerMaster(entityId, type.key))])),
     placeholder: masterView(getMasterTemplate()),
     schedules: brokerSchedules(entityId).map(scheduleView),
   };
 }
 
-export async function saveBrokerMaster(entityId, shape, file, { name, description } = {}) {
-  assertShape(shape);
+export async function saveBrokerMaster(entityId, typeKey, file, { name, description } = {}) {
+  const type = contractType(typeKey);
   const entity = requireBroker(entityId);
   requirePdf(file);
-  const stored = writeBytes("uploads", `master-${shape}-${Date.now()}-${file.originalname}`, file.buffer);
-  const existing = brokerMaster(entityId, shape);
+  const stored = writeBytes("uploads", `master-${type.key}-${Date.now()}-${file.originalname}`, file.buffer);
+  const existing = brokerMaster(entityId, type.key);
   if (existing) {
     db.prepare(
       "UPDATE templates SET source_url = ?, name = COALESCE(?, name), description = COALESCE(?, description) WHERE id = ?"
     ).run(`local://${stored.storageRef}`, name || null, description || null, existing.id);
     await applyMasterPdfFields(existing.id, file.buffer, { isNew: false });
-    return masterView(brokerMaster(entityId, shape));
+    return masterView(brokerMaster(entityId, type.key));
   }
   const id = newId();
   db.prepare(
     `INSERT INTO templates (
       id, entity_id, name, source_url, default_front_cover, default_back_cover,
-      is_active, created_at, industry, description, is_master, party_shape
-    ) VALUES (?, ?, ?, ?, NULL, NULL, 1, ?, NULL, ?, 1, ?)`
+      is_active, created_at, industry, description, is_master, party_shape, contract_type
+    ) VALUES (?, ?, ?, ?, NULL, NULL, 1, ?, NULL, ?, 1, ?, ?)`
   ).run(
     id,
     entityId,
     name || "Master Services Agreement",
     `local://${stored.storageRef}`,
     now(),
-    description || `${entity.display_name} ${SHAPE_LABEL[shape]} contract`,
-    shape
+    description || `${entity.display_name} ${type.label} contract`,
+    type.shape,
+    type.key
   );
   for (const [key, label, order] of ROLES) {
     db.prepare(
@@ -143,50 +161,52 @@ export async function saveBrokerMaster(entityId, shape, file, { name, descriptio
   }
   ensureSigningEvidence();
   await applyMasterPdfFields(id, file.buffer, { isNew: true });
-  return masterView(brokerMaster(entityId, shape));
+  return masterView(brokerMaster(entityId, type.key));
 }
 
-export function updateBrokerMaster(entityId, shape, { name, description } = {}) {
-  assertShape(shape);
-  const template = brokerMaster(entityId, shape);
-  if (!template) throw new Error(`No ${SHAPE_LABEL[shape]} contract for this broker yet`);
+export function updateBrokerMaster(entityId, typeKey, { name, description } = {}) {
+  const type = contractType(typeKey);
+  const template = brokerMaster(entityId, type.key);
+  if (!template) throw new Error(`No ${type.label} contract for this broker yet`);
   db.prepare("UPDATE templates SET name = ?, description = ? WHERE id = ?").run(
     String(name ?? template.name).trim() || template.name,
     description ?? template.description,
     template.id
   );
-  return masterView(brokerMaster(entityId, shape));
+  return masterView(brokerMaster(entityId, type.key));
 }
 
-export function deleteBrokerMaster(entityId, shape) {
-  assertShape(shape);
-  const template = brokerMaster(entityId, shape);
-  if (!template) throw new Error(`No ${SHAPE_LABEL[shape]} contract for this broker yet`);
+export function deleteBrokerMaster(entityId, typeKey) {
+  const type = contractType(typeKey);
+  const template = brokerMaster(entityId, type.key);
+  if (!template) throw new Error(`No ${type.label} contract for this broker yet`);
   db.prepare("UPDATE templates SET is_active = 0 WHERE id = ?").run(template.id);
 }
 
-export async function addSchedule(entityId, { name, description, shape } = {}, file) {
+export async function addSchedule(entityId, { name, description, types } = {}, file) {
   requireBroker(entityId);
   const title = String(name || "").trim();
   if (!title) throw new Error("Give the schedule a name");
   requirePdf(file);
+  const contractTypes = types === undefined ? null : storedScheduleTypes(types);
   const stored = writeBytes("uploads", `schedule-${Date.now()}-${file.originalname}`, file.buffer);
   const id = newId();
   db.prepare(
     `INSERT INTO appendices (
-      id, entity_id, industry, name, description, storage_ref, is_active, created_at, party_shape
+      id, entity_id, industry, name, description, storage_ref, is_active, created_at, contract_types
     ) VALUES (?, ?, '', ?, ?, ?, 1, ?, ?)`
-  ).run(id, entityId, title, description || null, stored.storageRef, now(), scheduleShape(shape));
+  ).run(id, entityId, title, description || null, stored.storageRef, now(), contractTypes);
   await applyAppendixPdfFields(id, file.buffer);
   return scheduleView(db.prepare("SELECT * FROM appendices WHERE id = ?").get(id));
 }
 
-/** Schedule ids as chosen for a contract, each one this broker's and fit for the shape. */
-export function schedulesForContract(entityId, shape, ids) {
+/** Schedule ids as chosen for a contract, each one this broker's and used on that type. */
+export function schedulesForContract(entityId, typeKey, ids) {
+  const type = contractType(typeKey);
   const wanted = Array.isArray(ids) ? [...new Set(ids.filter(Boolean))] : [];
-  const allowed = new Map(brokerSchedules(entityId, shape).map((row) => [row.id, row]));
+  const allowed = new Map(brokerSchedules(entityId, type.key).map((row) => [row.id, row]));
   for (const id of wanted) {
-    if (!allowed.has(id)) throw new Error(`That schedule is not one of this broker’s ${SHAPE_LABEL[shape]} schedules`);
+    if (!allowed.has(id)) throw new Error(`That schedule is not one of this broker’s ${type.label} schedules`);
   }
   return wanted.map((id) => allowed.get(id));
 }

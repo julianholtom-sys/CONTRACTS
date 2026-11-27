@@ -73,8 +73,8 @@ export default function Library() {
         <h1>Library</h1>
         <p>
           Pair a broker with a contractor. The broker supplies the cover and the
-          contracts. Pull it up later, choose 3-way or 4-way, then name the client and,
-          on a 4-way, the supplier.
+          contracts. Pull it up later, choose 3-way lower, 3-way higher or 4-way, then name the
+          client and, on a 4-way, the supplier.
         </p>
       </section>
 
