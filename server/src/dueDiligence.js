@@ -711,6 +711,7 @@ export function diligenceSession(partyId) {
     signedAt: state.validatedAt,
     signedName: state.signedName,
     consent: state.kind === "word" ? WORD_PACK_CONSENT : DD_CONSENT,
+    kind: state.kind || "app",
   };
   if (session.mode === "upload") {
     const section = state.sections.find((item) => item.roleKey === role.role_key);

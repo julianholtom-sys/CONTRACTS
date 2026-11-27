@@ -99,7 +99,11 @@ export default function DiligenceRoom() {
                     checked={consent}
                     onChange={(e) => setConsent(e.target.checked)}
                   />
-                  <span>I have checked this pack and sign the director’s certificate</span>
+                  <span>
+                    {session.kind === "word"
+                      ? "I have reviewed this pack and sign its verification and approval (Part K)"
+                      : "I have checked this pack and sign the director’s certificate"}
+                  </span>
                 </label>
                 {session.blockers?.length ? (
                   <ul className="audit-list">

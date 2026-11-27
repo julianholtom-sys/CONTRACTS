@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../api.js";
 import { EngagementFields } from "../EngagementFields.jsx";
 import SaveProgressBar from "../SaveProgressBar.jsx";
+import WordPackPanel from "../WordPackPanel.jsx";
 
 export default function EnvelopeDetail() {
   const { id } = useParams();
@@ -240,7 +241,9 @@ export default function EnvelopeDetail() {
         </section>
       ) : null}
 
-      {diligence?.applies ? (
+      {diligence?.applies && diligence.kind === "word" ? (
+        <WordPackPanel envelopeId={id} pack={diligence} busy={busy} run={run} />
+      ) : diligence?.applies ? (
         <section className="panel" style={{ marginBottom: "1.25rem" }}>
           <h2>Due diligence pack</h2>
           <p className="muted">Date each document, compile, then sign.</p>

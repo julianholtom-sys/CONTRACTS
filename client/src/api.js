@@ -183,6 +183,27 @@ export const api = {
   deleteBrokerContract: (entityId, type) =>
     request(`/api/brokers/${entityId}/contracts/${type}`, { method: "DELETE" }),
   brokerContractFileUrl: (entityId, type) => `/api/brokers/${entityId}/contracts/${type}/file`,
+  uploadBrokerPack: (entityId, type, file) => {
+    const body = new FormData();
+    body.append("file", file);
+    return request(`/api/brokers/${entityId}/packs/${type}/file`, { method: "POST", body });
+  },
+  deleteBrokerPack: (entityId, type) => request(`/api/brokers/${entityId}/packs/${type}`, { method: "DELETE" }),
+  brokerPackFileUrl: (entityId, type) => `/api/brokers/${entityId}/packs/${type}/file`,
+  saveWordPack: (id, body) =>
+    request(`/api/envelopes/${id}/pack`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  uploadWordPackFile: (id, key, file) => {
+    const body = new FormData();
+    body.append("key", key);
+    body.append("file", file);
+    return request(`/api/envelopes/${id}/pack/files`, { method: "POST", body });
+  },
+  deleteWordPackFile: (id, fileId) => request(`/api/envelopes/${id}/pack/files/${fileId}`, { method: "DELETE" }),
+  wordPackFileUrl: (id, fileId) => `/api/envelopes/${id}/pack/files/${fileId}`,
   addSchedule: (entityId, { name, types, file }) => {
     const body = new FormData();
     body.append("name", name);

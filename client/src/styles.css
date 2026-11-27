@@ -259,6 +259,86 @@ select {
   box-shadow: 0 -8px 24px rgba(16, 24, 40, 0.08);
 }
 
+.pack-part {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.pack-part > summary {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.85rem 0.95rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.pack-part[open] > summary {
+  border-bottom: 1px solid var(--line);
+}
+
+.pack-part-body {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.85rem;
+  align-items: end;
+  padding: 0.95rem;
+}
+
+.pack-record {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: end;
+}
+
+.pack-part-body > .pack-wide,
+.pack-record > .pack-wide {
+  grid-column: 1 / -1;
+}
+
+.pack-source {
+  color: var(--ink-soft);
+  font-weight: 500;
+}
+
+.pack-part-body h4 {
+  margin: 0.4rem 0 0;
+  color: var(--accent-deep);
+}
+
+.pack-row,
+.pack-repeat {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.pack-files {
+  display: grid;
+  gap: 0.3rem;
+  justify-items: start;
+}
+
+.pack-files p {
+  margin: 0;
+}
+
+.pack-files-label {
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.link-button {
+  appearance: none;
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--danger, #c0362c);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
 .pep-row {
   display: flex;
   flex-wrap: wrap;
@@ -651,7 +731,9 @@ textarea:focus {
 
 @media (max-width: 900px) {
   .split,
-  .signer-row {
+  .signer-row,
+  .pack-part-body,
+  .pack-record {
     grid-template-columns: 1fr;
   }
 

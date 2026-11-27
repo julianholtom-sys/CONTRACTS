@@ -42,7 +42,8 @@ export default function BrokerContracts({ entityId, brokerName, heading = "Contr
   async function confirmDelete() {
     if (!pending) return;
     await run("delete", async () => {
-      if (pending.type) await api.deleteBrokerContract(entityId, pending.type);
+      if (pending.pack) await api.deleteBrokerPack(entityId, pending.pack);
+      else if (pending.type) await api.deleteBrokerContract(entityId, pending.type);
       else await api.deleteAppendix(pending.id);
       setPending(null);
     });
@@ -87,6 +88,34 @@ export default function BrokerContracts({ entityId, brokerName, heading = "Contr
             onDelete={() => setPending({ type: type.key, name: `${brokerName}’s ${type.label} contract` })}
           />
         ))}
+      </div>
+
+      <h3 style={{ margin: 0 }}>Due diligence packs</h3>
+      <p className="muted">
+        A Word pack for each 3-way type, filled on the contract and laid out with this broker’s covers. 4-way contracts use the
+        app’s own pack.
+      </p>
+      <div className="brand-slots template-slots">
+        {(data.pack_types || []).map((key) => {
+          const type = data.types.find((item) => item.key === key);
+          const pack = data.packs?.[key];
+          return (
+            <FileSlot
+              key={key}
+              label={`${type?.label || key} pack`}
+              fileName={pack?.file_name}
+              mime="application/pdf"
+              present={Boolean(pack)}
+              previewUrl={pack ? api.brokerPackFileUrl(entityId, key) : ""}
+              accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+              busy={Boolean(busy)}
+              uploadLabel="Upload Word"
+              emptyText="Not uploaded. These contracts use the app’s own pack until it is."
+              onUpload={(file) => run(`pack-${key}`, () => api.uploadBrokerPack(entityId, key, file))}
+              onDelete={pack ? () => setPending({ pack: key, name: `${brokerName}’s ${type?.label || key} pack` }) : null}
+            />
+          );
+        })}
       </div>
 
       <div className="toolbar" style={{ margin: 0, justifyContent: "space-between" }}>
@@ -153,13 +182,15 @@ export default function BrokerContracts({ entityId, brokerName, heading = "Contr
         <ConfirmDialog
           title="Are you sure?"
           message={
-            pending.type
+            pending.pack
+              ? `Delete ${pending.name}? New contracts of this type will use the app’s own pack. Packs already started keep theirs.`
+              : pending.type
               ? `Delete ${pending.name}? ${
                   data.placeholder ? "New contracts of this type will use the placeholder until another is uploaded." : "New contracts of this type cannot be created until another is uploaded."
                 } Existing contracts stay on file.`
               : `Delete ${pending.name}? Existing contracts stay on file.`
           }
-          confirmLabel={pending.type ? "Yes, delete contract" : "Yes, delete schedule"}
+          confirmLabel={pending.pack ? "Yes, delete pack" : pending.type ? "Yes, delete contract" : "Yes, delete schedule"}
           busy={Boolean(busy)}
           onCancel={() => (busy ? null : setPending(null))}
           onConfirm={confirmDelete}
