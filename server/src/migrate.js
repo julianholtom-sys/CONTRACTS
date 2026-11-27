@@ -140,6 +140,33 @@ export function migrate() {
   ensureColumn("envelopes", "word_contract", "INTEGER NOT NULL DEFAULT 0");
   ensureColumn("envelopes", "contractor_fee", "TEXT");
   ensureColumn("envelopes", "payment_models", "TEXT");
+  // A broker's own due diligence pack (Word, Parts A–K) for 3-way lower or higher, filled by staff per contract.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS pack_templates (
+      id TEXT PRIMARY KEY,
+      entity_id TEXT NOT NULL REFERENCES entities(id),
+      contract_type TEXT NOT NULL,
+      file_name TEXT,
+      docx_ref TEXT NOT NULL,
+      preview_ref TEXT,
+      outline_json TEXT NOT NULL,
+      is_active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS word_pack_files (
+      id TEXT PRIMARY KEY,
+      envelope_id TEXT NOT NULL REFERENCES envelopes(id),
+      field_key TEXT NOT NULL,
+      original_name TEXT,
+      mime TEXT,
+      storage_ref TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+  `);
+  ensureColumn("envelopes", "pack_template_id", "TEXT");
+  ensureColumn("envelopes", "pack_json", "TEXT");
+  ensureColumn("envelopes", "dd_pack_build", "TEXT");
+  ensureColumn("outbound_emails", "attachments_json", "TEXT");
   // A 3-way contract made before 3-way lower and 3-way higher existed is 3-way lower.
   for (const table of ["templates", "envelopes"]) {
     db.exec(

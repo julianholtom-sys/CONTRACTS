@@ -1,11 +1,12 @@
-import { PDFDocument } from "pdf-lib";
+import { PDFDocument, StandardFonts } from "pdf-lib";
 import { contractReference, ukDate } from "./coverStamp.js";
 import { contractPartyDetails } from "./documentFields.js";
+import { docxBlocks } from "./docxContent.js";
 import { docxTokens, fillDocx } from "./docxTemplate.js";
-import { signingFields, tokenPlaces } from "./docxFields.js";
-import { brokerLegalName } from "./packLayout.js";
+import { signingFields } from "./docxFields.js";
+import { renderBlocks } from "./docLayout.js";
+import { PackWriter, brokerLegalName, normalCase, packTheme } from "./packLayout.js";
 import { readBytes } from "./storage.js";
-import { convertDocxToPdf } from "./wordConvert.js";
 
 export const PAYMENT_MODELS = { paye: "PAYE only", paye_cis: "PAYE and CIS" };
 
@@ -62,7 +63,28 @@ function companyValues(party) {
   };
 }
 
-/** The contract's Word template filled from the records, as a PDF, with the signing boxes its {{sig.*}} fields mark. */
+/**
+ * A Word template's wording in the app's own layout: the template's cover and back page are left out
+ * (the broker's covers go round it when baked), and so is a line of the broker's name above its title.
+ * Returns the pages, the places of its {{sig.*}} fields, and its title ("Terms of Business").
+ */
+async function layOut(filledDocx, entity, { showFields = false } = {}) {
+  const { blocks } = docxBlocks(filledDocx);
+  const firstHeading = blocks.findIndex((block) => block.type === "heading");
+  const body = blocks.filter((block, index) => !(index < firstHeading && block.type === "para" && block.kicker));
+  const doc = await PDFDocument.create();
+  const writer = new PackWriter(doc, {
+    font: await doc.embedFont(StandardFonts.Helvetica),
+    bold: await doc.embedFont(StandardFonts.HelveticaBold),
+    theme: packTheme(entity),
+  });
+  const places = renderBlocks(writer, body, { showFields });
+  const heading = blocks[firstHeading]?.text || "";
+  const title = /[a-z]/.test(heading) ? heading : normalCase(heading);
+  return { pdf: Buffer.from(await doc.save()), places, title };
+}
+
+/** The contract's Word template filled from the records, laid out by the app, with the signing boxes its {{sig.*}} fields mark. */
 export async function buildWordContract({ envelope, template, entity, issuedOn = null }) {
   const missing = missingEngagement(envelope, template);
   if (missing.length) throw new Error(`Enter ${missing.join(" and ")} on the contract first`);
@@ -91,17 +113,12 @@ export async function buildWordContract({ envelope, template, entity, issuedOn =
       issued_date: issuedOn ? ukDate(issuedOn) : "",
     },
   };
-  const filled = fillDocx(readBytes(template.docx_ref), { values });
-  const { pdf, markedPdf } = await convertDocxToPdf(filled, { marked: true });
-  const [clean, marked] = await Promise.all([PDFDocument.load(pdf), PDFDocument.load(markedPdf)]);
-  if (clean.getPageCount() !== marked.getPageCount()) {
-    throw new Error("The contract's pages moved when its signature fields were taken out. Check the Word template.");
-  }
-  return { pdf, fields: signingFields(await tokenPlaces(markedPdf)), reference };
+  const { pdf, places, title } = await layOut(fillDocx(readBytes(template.docx_ref), { values, plainAnswers: true }), entity);
+  return { pdf, fields: signingFields(places), reference, title };
 }
 
-/** A Word template as uploaded, shown with its fields: the system legend removed, room made for signatures. */
-export async function previewWordTemplate(docxBytes) {
-  const { markedPdf } = await convertDocxToPdf(fillDocx(docxBytes, { keepTokens: true }), { marked: true });
-  return { pdf: markedPdf, fields: signingFields(await tokenPlaces(markedPdf)) };
+/** A Word template as uploaded, in the app's layout with its fields showing (the system legend removed). */
+export async function previewWordTemplate(docxBytes, entity = null) {
+  const { pdf, places } = await layOut(fillDocx(docxBytes, { keepTokens: true }), entity, { showFields: true });
+  return { pdf, fields: signingFields(places) };
 }

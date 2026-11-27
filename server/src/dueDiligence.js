@@ -21,6 +21,7 @@ import {
   workerArrangements,
   workerSettings,
 } from "./ddChecks.js";
+import { compileWordPack, signWordPack, usesWordPack, wordPackState } from "./wordPack.js";
 
 const ACCEPTED = ["application/pdf", "image/jpeg", "image/png"];
 
@@ -28,12 +29,20 @@ export function ddApplies(envelope) {
   return envelope?.party_shape === "three" || envelope?.party_shape === "four";
 }
 
-export function assertDdEditable(envelope) {
+/** Either pack, the app's own or the broker's, can still be compiled and signed: the contract has not been issued. */
+export function assertPackOpen(envelope) {
   if (!ddApplies(envelope)) {
     throw new Error("This contract does not use the due diligence pack");
   }
   if (["in_progress", "completed", "declined", "voided", "expired"].includes(envelope.status)) {
     throw new Error("The due diligence pack is locked once the contract has been issued");
+  }
+}
+
+export function assertDdEditable(envelope) {
+  assertPackOpen(envelope);
+  if (usesWordPack(envelope)) {
+    throw new Error("This contract uses the broker's own due diligence pack");
   }
 }
 
@@ -123,6 +132,8 @@ export function dueDiligenceState(envelopeId) {
   if (!envelope || !ddApplies(envelope)) {
     return { applies: false };
   }
+  const word = wordPackState(envelopeId);
+  if (word) return word;
   const parties = partyByRole(envelopeId);
   const sections = [];
   for (const roleKey of sectionRoles(envelope)) {
@@ -463,6 +474,7 @@ function wrap(text, width) {
 
 export async function compileDueDiligence(envelopeId, actor = "staff") {
   const envelope = db.prepare("SELECT * FROM envelopes WHERE id = ?").get(envelopeId);
+  if (ddApplies(envelope) && usesWordPack(envelope)) return compileWordPack(envelopeId, actor);
   assertDdEditable(envelope);
   const state = dueDiligenceState(envelopeId);
   if (!state.readyToCompile) {
@@ -515,6 +527,7 @@ export function submitDueDiligence(envelopeId, roleKey, partyId = null) {
 
 const DD_CONSENT =
   "I have checked this due diligence pack and sign its director's certificate.";
+const WORD_PACK_CONSENT = "I have reviewed this due diligence pack and sign its verification and approval (Part K).";
 
 export async function signDueDiligence(envelopeId, {
   partyId,
@@ -524,6 +537,10 @@ export async function signDueDiligence(envelopeId, {
   userAgent,
 }) {
   const envelope = db.prepare("SELECT * FROM envelopes WHERE id = ?").get(envelopeId);
+  if (ddApplies(envelope) && usesWordPack(envelope)) {
+    await signWordPack(envelopeId, { partyId, signature, typedName, userAgent });
+    return dueDiligenceState(envelopeId);
+  }
   assertDdEditable(envelope);
   if (!envelope.dd_storage_ref || !envelope.dd_compiled_at) {
     throw new Error("The due diligence pack is not ready to sign");
@@ -693,7 +710,7 @@ export function diligenceSession(partyId) {
     signed: Boolean(state.validatedAt),
     signedAt: state.validatedAt,
     signedName: state.signedName,
-    consent: DD_CONSENT,
+    consent: state.kind === "word" ? WORD_PACK_CONSENT : DD_CONSENT,
   };
   if (session.mode === "upload") {
     const section = state.sections.find((item) => item.roleKey === role.role_key);

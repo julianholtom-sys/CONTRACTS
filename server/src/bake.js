@@ -1,6 +1,14 @@
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import { coverDetails, coverTokens, stampContractDates, stampCoverDetails, ukDate } from "./coverStamp.js";
-import { addBrandedBackCover, addBrandedCover, brokerLegalName, packTheme } from "./packLayout.js";
+import {
+  addBrandedBackCover,
+  addBrandedCover,
+  addPlainCover,
+  brokerLegalName,
+  drawFrame,
+  packTheme,
+  wordmarkParts,
+} from "./packLayout.js";
 import { db, newId, now, sha256, parseJson } from "./db.js";
 import { appendEvent } from "./events.js";
 import { readBytes, writeBytes } from "./storage.js";
@@ -154,7 +162,6 @@ export function getMasterTemplate({ includeInactive = false } = {}) {
   );
 }
 
-/** `issuedOn` fills a Word contract's issue date; it is given when the contract is sent. */
 /** Word fields keep the same id across bakes, so values entered before a re-bake stay with their box. */
 function wordFieldIds(fields) {
   const seen = new Map();
@@ -218,7 +225,7 @@ export async function bakeEnvelope(envelopeId, { actor = "system", issuedOn = nu
       industry: envelope.industry || template.industry || null,
       appendixIds,
     });
-    // A Word contract is filled from the records and carries its own covers and signing boxes.
+    // A Word contract is filled from the records and laid out by the app, with its signing boxes where its fields are.
     const word = Boolean(template.docx_ref);
     const sourceBytes = word ? readBytes(template.docx_ref) : await loadOrCreateSourcePdf(template);
     const contentHash = sha256(sourceBytes);
@@ -276,55 +283,73 @@ export async function bakeEnvelope(envelopeId, { actor = "system", issuedOn = nu
     );
     const brokerName = entity.display_name || "the broker";
     const brokerLegal = brokerLegalName(entity) || brokerName;
+    const theme = packTheme(entity);
+    const prepared = envelope.prepared_on ? ukDate(envelope.prepared_on) : "";
+    // A Word contract is filled again with its issue date when it is sent.
+    const issued = issuedOn ? ukDate(issuedOn) : "On send";
     const coverFill = {
-      tokens: coverTokens(details, entity, {
-        brokerLegal,
-        document: template.name,
-        prepared: envelope.prepared_on ? ukDate(envelope.prepared_on) : "",
-      }),
+      tokens: {
+        ...coverTokens(details, entity, { brokerLegal, document: template.name, prepared }),
+        ...(word ? { Issued: issued } : {}),
+      },
       rows: [
         ["Client", details.client || "—"],
         ["Contractor", details.contractor || "—"],
         ...(details.supplier ? [["Supplier", details.supplier]] : []),
         ["Broker", brokerLegal],
         ["Reference", details.reference, true],
+        ...(word ? [["Issued", issued]] : []),
         ["Dated", "Date of last signature"],
       ],
     };
     const built = word
       ? await buildWordContract({ envelope, template: { ...template, docx_ref: version.storage_ref }, entity, issuedOn })
       : null;
-    const frontDoc = word ? null : await pdfFromAsset(brand.front);
-    if (frontDoc) {
-      const branded = await addBrandedCover(
-        bakedDoc,
-        brand.front,
-        { font, bold, theme: packTheme(entity) },
-        {
-          brand: brokerName.toUpperCase(),
-          packTitle: template.name,
-          forUse: `${details.version} contract`,
-          parties: [
-            ["Contractor", details.contractor || "—"],
-            ...(details.supplier ? [["Supplier", details.supplier]] : []),
-            ["Client", details.client || "—"],
-          ],
-          legal: [
-            brokerLegal,
-            ...(entity.company_number ? [`Company number ${entity.company_number}`] : []),
-            ...(entity.registered_office ? [`Registered office: ${entity.registered_office}`] : []),
-          ],
-          meta: [
-            ["Prepared", envelope.prepared_on ? ukDate(envelope.prepared_on) : "—"],
+    let logo = null;
+    if (word && brand.logo) {
+      try {
+        logo = await embedLogoImage(bakedDoc, brand.logo);
+      } catch {
+        logo = null;
+      }
+    }
+    // "three_higher" → "3-way higher"
+    const typeLabel = word && /^three_\w+$/.test(template.contract_type || "") ? `3-way ${template.contract_type.slice(6)}` : details.version;
+    const cover = {
+      brand: brokerName.toUpperCase(),
+      packTitle: word ? built.title : template.name,
+      forUse: `${typeLabel} contract`,
+      parties: [
+        ["Contractor", details.contractor || "—"],
+        ...(details.supplier ? [["Supplier", details.supplier]] : []),
+        ["Client", details.client || "—"],
+        ...(word ? [["Doc ID", details.reference]] : []),
+      ],
+      legal: [
+        brokerLegal,
+        ...(entity.company_number ? [`Company number ${entity.company_number}`] : []),
+        ...(entity.registered_office ? [`Registered office: ${entity.registered_office}`] : []),
+      ],
+      meta: word
+        ? [
+            ["Prepared", prepared || "—"],
+            ["Issued", issued],
+          ]
+        : [
+            ["Prepared", prepared || "—"],
             ["Doc ID", details.reference],
           ],
-          fill: coverFill,
-        }
-      );
+      fill: coverFill,
+    };
+    const frontDoc = await pdfFromAsset(brand.front);
+    if (frontDoc) {
+      const branded = await addBrandedCover(bakedDoc, brand.front, { font, bold, theme }, cover);
       const indices = frontDoc.getPageIndices().slice(branded ? 1 : 0);
       const pages = await bakedDoc.copyPages(frontDoc, indices);
       pages.forEach((p) => bakedDoc.addPage(p));
       if (!branded) stampCoverDetails(bakedDoc.getPages()[0], font, bold, details);
+    } else if (word) {
+      addPlainCover(bakedDoc, { font, bold, theme }, { ...cover, title: built.title.toUpperCase(), subtitle: "" }, logo);
     }
 
     const contractDoc = await PDFDocument.load(word ? built.pdf : readBytes(version.storage_ref));
@@ -333,8 +358,8 @@ export async function bakeEnvelope(envelopeId, { actor = "system", issuedOn = nu
       contractDoc.getPageIndices()
     );
     // People read the contract and its schedules, then sign: the contract's pages with
-    // signature fields come after the schedules, just before the back cover. A Word contract
-    // keeps its own back pages, so its schedules go in before its first signing page.
+    // signature fields come after the schedules, just before the back cover. A Word contract's
+    // execution runs to its end, so every page from its first signing page on goes there.
     const contractFields = word ? built.fields : fields;
     const signingPages = new Set(
       contractFields.filter((f) => f.field_type === "signature").map((f) => Number(f.page || 0))
@@ -365,6 +390,14 @@ export async function bakeEnvelope(envelopeId, { actor = "system", issuedOn = nu
 
     placeContractPages((index) => signingPages.has(index));
     const contractPageOffset = masterPageMap[0];
+
+    if (word) {
+      const footer = `${built.title}, Contract reference ${details.reference}`;
+      const wordmark = wordmarkParts(brokerName);
+      masterPageMap.forEach((pageIndex) =>
+        drawFrame(bakedDoc.getPage(pageIndex), { pageNumber: pageIndex + 1, theme, font, bold, logo, wordmark, footer })
+      );
+    }
 
     // The shared placeholder gets the broker's legal footer and logo; a broker's own contract
     // already carries its branding, and a second logo would sit on top of it.
@@ -397,11 +430,11 @@ export async function bakeEnvelope(envelopeId, { actor = "system", issuedOn = nu
       }
     }
 
-    if (brand.back && !word) {
+    if (brand.back) {
       await addBrandedBackCover(
         bakedDoc,
         brand.back,
-        { font, bold, theme: packTheme(entity) },
+        { font, bold, theme },
         {
           name: brokerLegalName(entity),
           companyNumber: entity.company_number || "",
@@ -411,7 +444,8 @@ export async function bakeEnvelope(envelopeId, { actor = "system", issuedOn = nu
       );
     }
 
-    const usesPack = ["three", "four"].includes(envelope.party_shape);
+    // A broker's own pack (envelope.pack_template_id) stays a separate PDF; only the app's own pack is bound in.
+    const usesPack = ["three", "four"].includes(envelope.party_shape) && !envelope.pack_template_id;
     const signedPack = usesPack && envelope.dd_validated_at && envelope.dd_storage_ref;
     if (signedPack) {
       const packDoc = await PDFDocument.load(readBytes(envelope.dd_storage_ref));
@@ -574,7 +608,7 @@ export async function bakeForIssue(envelopeId, { actor = "staff", issuedOn }) {
 /** The signed pack travels with the contract, so an issue must carry the pack as last signed. */
 export async function bakeInSignedPack(envelopeId, { actor = "staff" } = {}) {
   const envelope = db.prepare("SELECT * FROM envelopes WHERE id = ?").get(envelopeId);
-  if (envelope?.status !== "ready" || !envelope.dd_validated_at) return false;
+  if (envelope?.status !== "ready" || !envelope.dd_validated_at || envelope.pack_template_id) return false;
   if (envelope.baked_dd_sha256 === envelope.dd_sha256 && envelope.baked_clean_ref) return false;
   await bakeEnvelope(envelopeId, { actor });
   return true;

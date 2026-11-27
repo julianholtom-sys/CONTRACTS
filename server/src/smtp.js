@@ -77,7 +77,7 @@ export function mailStatus(entity = {}) {
   };
 }
 
-async function sendSmtp(entity, smtp, { to, subject, text, html }) {
+async function sendSmtp(entity, smtp, { to, subject, text, html, attachments = [] }) {
   const transport = transportFromConfig(smtp);
   const name = String(entity?.display_name || "Attest").replace(/"/g, "");
   await transport.sendMail({
@@ -86,6 +86,7 @@ async function sendSmtp(entity, smtp, { to, subject, text, html }) {
     subject,
     text,
     html,
+    attachments,
   });
   return { via: `smtp:${smtp.host}` };
 }
@@ -125,11 +126,11 @@ async function sendOutlook({ to, subject, text, html, from }) {
   }
 }
 
-export async function deliverMail({ entity, to, subject, text, html, allowOutlook = false }) {
+export async function deliverMail({ entity, to, subject, text, html, attachments = [], allowOutlook = false }) {
   const smtp = smtpConfig(entity);
   if (smtp) {
     try {
-      return await sendSmtp(entity, smtp, { to, subject, text, html });
+      return await sendSmtp(entity, smtp, { to, subject, text, html, attachments });
     } catch (err) {
       throw new Error(`SMTP send failed (${err.message}). Check host, username, and App Password.`);
     }

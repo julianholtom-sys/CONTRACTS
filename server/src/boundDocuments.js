@@ -64,7 +64,7 @@ const isPng = (bytes) =>
 const pageRange = (item) => (item.pages > 1 ? `${item.start}–${item.start + item.pages - 1}` : String(item.start));
 
 /** Leading page, laid out like a pack divider, with the index of the documents after it. */
-function addIndexPage(writer, items, reference) {
+function addIndexPage(writer, items, { noun, heading, referenceLine, partyColumn }) {
   const { font, bold, theme } = writer;
   const page = writer.newPage();
   let y = 650;
@@ -74,18 +74,28 @@ function addIndexPage(writer, items, reference) {
       y -= size + gap;
     }
   };
-  line(items.length === 1 ? "DOCUMENT 1" : `DOCUMENTS 1–${items.length}`, 9, bold, theme.muted, 24);
-  line("DOCUMENTS PROVIDED AT SIGNING", 26, bold, theme.accent, 10);
-  line(`Contract reference ${reference}`, 10, font, theme.muted, 6);
+  const plural = `${noun.toUpperCase()}${noun === "Annex" ? "ES" : "S"}`;
+  line(items.length === 1 ? `${noun.toUpperCase()} 1` : `${plural} 1–${items.length}`, 9, bold, theme.muted, 24);
+  line(heading, 26, bold, theme.accent, 10);
+  line(referenceLine, 10, font, theme.muted, 6);
   page.drawRectangle({ x: MARGIN, y: y - 4, width: 80, height: 3, color: theme.accent });
   writer.y = y - 30;
   writer.table(
-    [
-      { label: "Document", width: CONTENT_W - 230 },
-      { label: "Party", width: 180 },
-      { label: "Pages", width: 50, align: "center" },
-    ],
-    items.map((item, index) => [`Document ${index + 1}: ${item.document}`, `${item.party}: ${item.company}`, pageRange(item)]),
+    partyColumn
+      ? [
+          { label: noun, width: CONTENT_W - 230 },
+          { label: "Party", width: 180 },
+          { label: "Pages", width: 50, align: "center" },
+        ]
+      : [
+          { label: noun, width: CONTENT_W - 50 },
+          { label: "Pages", width: 50, align: "center" },
+        ],
+    items.map((item, index) =>
+      partyColumn
+        ? [`${noun} ${index + 1}: ${item.document}`, `${item.party}: ${item.company}`, pageRange(item)]
+        : [`${noun} ${index + 1}: ${item.document}`, pageRange(item)]
+    ),
     { size: 8 }
   );
 }
@@ -126,8 +136,12 @@ async function addDocumentPages(pdf, item, caption, fonts) {
   });
 }
 
-/** Binds the documents in with the broker's page frame, an index page and captions, like the pack's annexes. */
-export async function appendBoundAttachments(pdf, envelope, entries) {
+/**
+ * Binds the documents in with the broker's page frame, an index page and captions, like the pack's annexes.
+ * By default they are the documents provided at signing; `annexes` ({ reference, firstPage?, footer? })
+ * lays them out as a pack's annexes instead, numbered on from the pack's page `firstPage`.
+ */
+export async function appendBoundAttachments(pdf, envelope, entries, annexes = null) {
   if (!entries.length) return;
   const entity = db.prepare("SELECT * FROM entities WHERE id = ?").get(envelope.entity_id);
   const theme = packTheme(entity);
@@ -144,8 +158,9 @@ export async function appendBoundAttachments(pdf, envelope, entries) {
     }
   }
 
+  const firstPage = annexes?.firstPage || 1;
   const items = [];
-  let pageNumber = 2;
+  let pageNumber = firstPage + 1;
   for (const entry of entries) {
     const bytes = Buffer.from(entry.bytes);
     const item = { ...entry, bytes, pages: 1 };
@@ -166,18 +181,24 @@ export async function appendBoundAttachments(pdf, envelope, entries) {
     items.push(item);
   }
 
-  const reference = contractReference(envelope, "CT");
+  const reference = annexes ? annexes.reference : contractReference(envelope, "CT");
+  const layout = annexes
+    ? { noun: "Annex", heading: "ANNEXES", referenceLine: `Pack reference ${reference}`, partyColumn: false }
+    : { noun: "Document", heading: "DOCUMENTS PROVIDED AT SIGNING", referenceLine: `Contract reference ${reference}`, partyColumn: true };
   const first = pdf.getPageCount();
-  addIndexPage(new PackWriter(pdf, fonts), items, reference);
+  addIndexPage(new PackWriter(pdf, fonts), items, layout);
   for (const [index, item] of items.entries()) {
-    await addDocumentPages(pdf, item, `Document ${index + 1}: ${item.party}, ${item.document}`, fonts);
+    const caption = annexes ? `Annex ${index + 1}: ${item.document}` : `Document ${index + 1}: ${item.party}, ${item.document}`;
+    await addDocumentPages(pdf, item, caption, fonts);
   }
 
-  const footer = `Documents provided at signing, Contract reference ${reference}`;
+  const footer = annexes
+    ? annexes.footer || `Due diligence pack annexes, Pack reference ${reference}`
+    : `Documents provided at signing, Contract reference ${reference}`;
   const wordmark = wordmarkParts(entity?.display_name || "");
   for (let index = first; index < pdf.getPageCount(); index += 1) {
     drawFrame(pdf.getPage(index), {
-      pageNumber: index - first + 1,
+      pageNumber: firstPage + index - first,
       theme,
       font,
       bold,

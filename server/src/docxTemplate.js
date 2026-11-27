@@ -8,15 +8,20 @@ import { strFromU8, strToU8, unzipSync, zipSync } from "fflate";
  */
 
 const PARTS = /^word\/(document|header\d+|footer\d+)\.xml$/;
-const TOKEN = /\{\{([^{}]+)\}\}|\[\[([A-Z]+):([^\]]*)\]\]/g;
-const HAS_TOKEN = /\{\{[^{}]+\}\}|\[\[[A-Z]+:[^\]]*\]\]/;
+// An answer's key can carry a row number, as in [[YN:partb.pscs[0].is_ubo]].
+const ANSWER_BODY = String.raw`(?:[^\[\]]|\[[^\[\]]*\])*`;
+const TOKEN = new RegExp(String.raw`\{\{([^{}]+)\}\}|\[\[([A-Z]+):(${ANSWER_BODY})\]\]`, "g");
+const HAS_TOKEN = new RegExp(String.raw`\{\{[^{}]+\}\}|\[\[[A-Z]+:${ANSWER_BODY}\]\]`);
+const ANSWER_TOKEN = new RegExp(String.raw`^\[\[([A-Z]+):(${ANSWER_BODY})\]\]$`);
 const GENERIC = new Set(["path", "checks.*", "key", "checks.*.result", "sig.role.field"]);
-const SIGNATURE_SPACE_TWIPS = 480;
 
 export const BOX_TICKED = "\u2612";
 export const BOX_EMPTY = "\u2610";
+// With `plainAnswers`, ticks are private-use marks the app's own layout draws as boxes.
+export const MARK_TICKED = "\uE000";
+export const MARK_EMPTY = "\uE001";
 
-const unescapeXml = (text) =>
+export const unescapeXml = (text) =>
   String(text)
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
@@ -38,7 +43,7 @@ function lastIndexOfPattern(text, pattern, before) {
 }
 
 /** Top-level elements of a stretch of WordprocessingML (paragraphs, tables, rows), nesting respected. */
-function elements(xml, tags = ["w:p", "w:tbl", "w:sectPr"]) {
+export function elements(xml, tags = ["w:p", "w:tbl", "w:sectPr"]) {
   const out = [];
   const opener = new RegExp(`<(${tags.join("|")})(?=[ >/])`, "g");
   let match;
@@ -64,7 +69,7 @@ function elements(xml, tags = ["w:p", "w:tbl", "w:sectPr"]) {
   return out;
 }
 
-function bodyOf(documentXml) {
+export function bodyOf(documentXml) {
   const open = documentXml.indexOf("<w:body>") + "<w:body>".length;
   const close = documentXml.lastIndexOf("</w:body>");
   return { head: documentXml.slice(0, open), body: documentXml.slice(open, close), tail: documentXml.slice(close) };
@@ -204,42 +209,6 @@ function expandArrays(body, countOf, emptyText) {
     .reduce((xml, table) => splice(xml, table.start, table.end, expandTableRows(table.xml, countOf)), body);
 }
 
-const LATER_IN_PPR =
-  /<w:(ind|contextualSpacing|mirrorIndents|suppressOverlap|jc|textDirection|textAlignment|textboxTightWrap|outlineLvl|divId|cnfStyle|rPr|sectPr|pPrChange)\b/;
-
-function setSpacingBefore(paragraphXml, twips) {
-  const tag = `<w:spacing w:before="${twips}"/>`;
-  if (!/<w:pPr>/.test(paragraphXml)) return paragraphXml.replace(/^<w:p([^>]*)>/, `<w:p$1><w:pPr>${tag}</w:pPr>`);
-  return paragraphXml.replace(/<w:pPr>([\s\S]*?)<\/w:pPr>/, (whole, inner) => {
-    if (/<w:spacing\b/.test(inner)) {
-      return `<w:pPr>${inner.replace(/<w:spacing\b([^>]*?)\/>/, (spacing, attrs) => {
-        const kept = attrs.replace(/\s+w:before(Autospacing|Lines)?="[^"]*"/g, "");
-        return `<w:spacing${kept} w:before="${twips}"/>`;
-      })}</w:pPr>`;
-    }
-    const at = inner.search(LATER_IN_PPR);
-    return `<w:pPr>${at < 0 ? inner + tag : inner.slice(0, at) + tag + inner.slice(at)}</w:pPr>`;
-  });
-}
-
-/** Room above each signature line (and the rest of its table row) for the signature itself. */
-function makeSignatureRoom(body) {
-  const marks = [...body.matchAll(/\{\{sig\.[\w.]+\.signature\}\}/g)].map((m) => m.index).reverse();
-  for (const at of marks) {
-    const rowStart = lastIndexOfPattern(body, /<w:tr(?=[ >])/g, at);
-    const rowEnd = body.indexOf("</w:tr>", at);
-    const inRow = rowStart >= 0 && body.lastIndexOf("</w:tr>", at) < rowStart && rowEnd > at;
-    const start = inRow ? rowStart : lastIndexOfPattern(body, /<w:p(?=[ >])/g, at);
-    const end = inRow ? rowEnd : body.indexOf("</w:p>", at) + "</w:p>".length;
-    const stretch = body.slice(start, end);
-    const spaced = elements(stretch, ["w:p"])
-      .sort((a, b) => b.start - a.start)
-      .reduce((xml, paragraph) => splice(xml, paragraph.start, paragraph.end, setSpacingBefore(paragraph.xml, SIGNATURE_SPACE_TWIPS)), stretch);
-    body = splice(body, start, end, spaced);
-  }
-  return body;
-}
-
 /** The colour most of the document's own words are set in; filled values take it. */
 function bodyColour(xml) {
   const counts = new Map();
@@ -252,7 +221,7 @@ function bodyColour(xml) {
 }
 
 const RUN = /<w:r(?=[ >])(?:(?!<\/w:r>)[\s\S])*?<\/w:r>/g;
-const ALONE_TOKEN = /^\s*(?:\{\{(?!sig\.)[^{}]+\}\}|\[\[[A-Z]+:[^\]]*\]\])\s*$/;
+const ALONE_TOKEN = new RegExp(String.raw`^\s*(?:\{\{(?!sig\.)[^{}]+\}\}|\[\[[A-Z]+:${ANSWER_BODY}\]\])\s*$`);
 const LATER_IN_RPR =
   /<w:(spacing|w|kern|position|sz|szCs|highlight|u|effect|bdr|shd|fitText|vertAlign|rtl|cs|em|lang|eastAsianLayout|specVanish|oMath)\b/;
 
@@ -383,19 +352,22 @@ function renderToken(token, data) {
     const text = data.text(path);
     return text == null || text === "" ? data.blank : String(text).replace(/\s*\n+\s*/g, ", ");
   }
-  const [, kind, rest] = token.match(/^\[\[([A-Z]+):([^\]]*)\]\]$/) || [];
+  const [, kind, rest] = token.match(ANSWER_TOKEN) || [];
   const [key, ...options] = unescapeXml(rest || "").split("|").map((part) => part.trim());
   if (key.includes("[none]")) return data.blank;
   switch (kind) {
     case "CHECK":
+      if (data.plainAnswers) return data.answer(key) ? MARK_TICKED : MARK_EMPTY;
       return data.answer(key) ? BOX_TICKED : BOX_EMPTY;
     case "YN": {
       const answer = data.answer(key);
       const yes = answer === true || answer === "yes";
       const no = answer === false || answer === "no";
+      if (data.plainAnswers) return yes ? "Yes" : no ? "No" : data.blank;
       return `${yes ? BOX_TICKED : BOX_EMPTY} Yes   ${no ? BOX_TICKED : BOX_EMPTY} No`;
     }
     case "SELECT":
+      if (data.plainAnswers) return options.includes(data.answer(key)) ? data.answer(key) : data.blank;
       return selectText(options, data.answer(key));
     case "UPLOAD":
       return data.upload(key, options.join("|")) || data.notProvided;
@@ -432,8 +404,9 @@ function lookup(source, path) {
  * Fills a Word template. `values` holds {{path}} text (nested objects or flat "a.b" keys; arrays for
  * numbered rows and blocks); `answers` the [[CHECK]], [[YN]] and [[SELECT]] keys; `conditions` the
  * [[COND]] paths; `uploads` and `images` the line printed for each piece of evidence. {{sig.*}} fields
- * stay in place, with room for the signature, unless `signatures` gives their text. `keepTokens` only
- * removes the system legend and makes room for signatures, for a preview of the template itself.
+ * stay in place unless `signatures` gives their text. `plainAnswers` writes ticks as MARK_TICKED /
+ * MARK_EMPTY and a Yes/No or choice as the chosen word, for the app's own layout. `keepTokens` only
+ * removes the system legend, for a preview of the template itself.
  */
 export function fillDocx(bytes, {
   values = {},
@@ -446,17 +419,17 @@ export function fillDocx(bytes, {
   notProvided = "Not provided",
   emptyList = () => "None.",
   keepTokens = false,
+  plainAnswers = false,
 } = {}) {
   const files = unzipSync(new Uint8Array(bytes));
   if (keepTokens) {
-    const xml = strFromU8(files["word/document.xml"]);
-    const parts = bodyOf(removeSystemLegend(xml));
-    files["word/document.xml"] = strToU8(parts.head + makeSignatureRoom(parts.body) + parts.tail);
+    files["word/document.xml"] = strToU8(removeSystemLegend(strFromU8(files["word/document.xml"])));
     return Buffer.from(zipSync(files, { level: 6 }));
   }
   const data = {
     blank,
     notProvided,
+    plainAnswers,
     text: (path) => {
       const value = lookup(values, path);
       return Array.isArray(value) ? value.join(", ") : value;
@@ -479,7 +452,6 @@ export function fillDocx(bytes, {
       let body = removeTokenKey(parts.body);
       body = applyConditions(body, (path) => Boolean(lookup(conditions, path)));
       body = expandArrays(body, countOf, emptyList);
-      body = makeSignatureRoom(body);
       xml = fillTokens(recolourTokenRuns(parts.head + body + parts.tail, colour), data);
     } else {
       xml = fillTokens(recolourTokenRuns(xml, bodyColour(xml)), data);
@@ -512,7 +484,7 @@ export function docxTokens(bytes) {
         (field[1].trim().startsWith("sig.") ? found.signatures : found.fields).add(field[1].trim());
         continue;
       }
-      const [, kind, rest] = token.match(/^\[\[([A-Z]+):([^\]]*)\]\]$/) || [];
+      const [, kind, rest] = token.match(ANSWER_TOKEN) || [];
       const [key, ...options] = (rest || "").split("|").map((part) => part.trim());
       if (kind === "CHECK") found.checks.add(key);
       else if (kind === "YN") found.yn.add(key);
@@ -523,6 +495,172 @@ export function docxTokens(bytes) {
     }
   }
   return found;
+}
+
+const PART_HEADING = /^PART ([A-Z]) [—–-] (.+)$/;
+const SUB_HEADING = /^([A-Z]\d+)\s+(\S.*)$/;
+const squash = (text) => String(text || "").replace(/\s+/g, " ").trim();
+const withoutTokens = (text) => squash(String(text).replace(TOKEN, " "));
+const sentenceCase = (text) => {
+  const lower = text.toLowerCase().replace(/\b(cis|hmrc|paye|vat|uk|psc|ubo|ern|ao|utr|ico|rti|fps|nic)\b/g, (word) => word.toUpperCase());
+  return lower.charAt(0).toUpperCase() + lower.slice(1);
+};
+
+/** One form field per token: its kind, its path with numbered rows written as [], and its options. */
+function outlineField(token) {
+  const field = token.match(/^\{\{([^{}]+)\}\}$/);
+  if (field) {
+    const path = field[1].trim();
+    if (path.startsWith("sig.")) return null;
+    return { kind: "field", path };
+  }
+  const [, kind, rest] = token.match(ANSWER_TOKEN) || [];
+  const [key, ...options] = unescapeXml(rest || "").split("|").map((part) => part.trim());
+  const kinds = { CHECK: "check", YN: "yn", SELECT: "select", UPLOAD: "upload", IMG: "image" };
+  if (!kinds[kind]) return null;
+  const out = { kind: kinds[kind], path: key };
+  if (kind === "SELECT") out.options = options;
+  if (kind === "UPLOAD") out.description = options.join("|");
+  return out;
+}
+
+const rowPath = (path) => path.replace(/\[0\]/g, "[]");
+const laterRow = (path) => /\[(?:[1-9]\d*|n)\]/.test(path);
+const arraysOf = (fields) => [...new Set(fields.flatMap((field) => [...field.path.matchAll(/([A-Za-z_][\w.]*)\[\]/g)].map((m) => m[1])))];
+
+/** The fields in a stretch of text, each captioned by the words just before it (or after it, for a tick). */
+function fieldsInText(text) {
+  const out = [];
+  const matches = [...text.matchAll(TOKEN)];
+  matches.forEach((match, index) => {
+    const field = outlineField(match[0]);
+    if (!field || laterRow(field.path)) return;
+    const before = withoutTokens(text.slice(index ? matches[index - 1].index + matches[index - 1][0].length : 0, match.index)).replace(/^[\/\-–—,;:|]*$/, "");
+    const nextAt = index + 1 < matches.length ? matches[index + 1].index : text.length;
+    const after = withoutTokens(text.slice(match.index + match[0].length, nextAt));
+    out.push({ ...field, path: rowPath(field.path), before, after });
+  });
+  return out;
+}
+
+function cellsOf(rowXml) {
+  return elements(rowXml.slice(rowXml.indexOf(">") + 1), ["w:tc"]).map((cell) => ({ text: textOf(cell.xml) }));
+}
+
+/** A table row as a labelled line of fields. */
+function outlineRow(cells, headers) {
+  const labelAt = cells.findIndex((cell) => !HAS_TOKEN.test(cell.text) && withoutTokens(cell.text) && !/^\d+$/.test(withoutTokens(cell.text)));
+  const label = labelAt >= 0 ? withoutTokens(cells[labelAt].text) : "";
+  const filledColumns = cells.filter((cell, col) => col !== labelAt && HAS_TOKEN.test(cell.text)).length;
+  const columns = headers && headers.length === cells.length && filledColumns > 1 ? headers : null;
+  const fields = [];
+  cells.forEach((cell, col) => {
+    if (col === labelAt) return;
+    for (const field of fieldsInText(cell.text)) {
+      const caption = field.before || (columns && columns[col] && columns[col] !== label ? columns[col] : "");
+      fields.push({ ...field, caption, hint: field.kind === "check" || field.kind === "yn" ? field.after : "" });
+    }
+  });
+  const parts = label.split(" / ");
+  const plain = fields.filter((field) => field.kind === "field");
+  if (parts.length > 1 && parts.length === plain.length && plain.every((field) => !field.caption)) {
+    plain.forEach((field, index) => (field.caption = sentenceCase(parts[index])));
+  }
+  return { label, fields: fields.map(({ before, after, ...field }) => field) };
+}
+
+/**
+ * The template as a form: its Parts in order, each with its sub-headings, labelled rows of fields,
+ * tick statements, and repeating rows or blocks (numbered [0] in the template, written [] here).
+ */
+export function docxOutline(bytes, { names = [] } = {}) {
+  const xml = strFromU8(unzipSync(new Uint8Array(bytes))["word/document.xml"]);
+  const properNames = (text) =>
+    names.filter(Boolean).reduce((out, name) => out.replace(new RegExp(name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"), name), text);
+  const body = removeTokenKey(bodyOf(removeSystemLegend(xml)).body);
+  const sections = [];
+  let section = { key: "", title: "", blocks: [] };
+  let condition = null;
+  let recordTitle = "";
+  const add = (block) => section.blocks.push(condition ? { ...block, condition } : block);
+  const items = elements(body);
+  items.forEach((item, index) => {
+    if (item.tag === "w:p") {
+      const raw = textOf(item.xml);
+      const text = squash(raw);
+      const part = text.match(PART_HEADING);
+      if (part) {
+        section = { key: part[1], title: `Part ${part[1]} — ${properNames(sentenceCase(part[2]))}`, blocks: [] };
+        sections.push(section);
+        condition = null;
+        return;
+      }
+      const opens = raw.match(/\[\[COND:([^\]]+)\]\]/);
+      if (opens) {
+        condition = opens[1].trim();
+        const note = withoutTokens(raw);
+        if (note) add({ type: "note", text: note });
+      }
+      if (raw.includes("[[/COND]]")) {
+        condition = null;
+        return;
+      }
+      if (opens) return;
+      const sub = !HAS_TOKEN.test(text) && text.match(SUB_HEADING);
+      if (sub && text.length < 90) {
+        const next = items[index + 1];
+        const record = next?.tag === "w:tbl" && elements(next.xml, ["w:tr"]).filter((row) => hasIndex(row.xml, 0)).length > 1;
+        const repeated = next?.tag === "w:tbl" && !hasIndex(next.xml, 0) && (hasIndex(next.xml, 1) || hasIndex(next.xml, "n"));
+        if (record) recordTitle = sub[2].replace(/\s+1$/, "");
+        else if (!repeated && !(next?.tag === "w:p" && /\[(?:1|n)\]/.test(textOf(next.xml)))) add({ type: "heading", text: `${sub[1]} ${sub[2]}` });
+        return;
+      }
+      for (const field of fieldsInText(raw)) {
+        if (field.kind === "check") add({ type: "check", path: field.path, label: field.after || field.before });
+        else add({ type: "row", label: field.before, fields: [{ ...field, caption: "", hint: field.after }] });
+      }
+      return;
+    }
+    if (item.tag !== "w:tbl") return;
+    const rows = elements(item.xml, ["w:tr"]).map((row) => ({ xml: row.xml, cells: cellsOf(row.xml) }));
+    const firstRowTokens = HAS_TOKEN.test(rows[0]?.cells.map((cell) => cell.text).join(""));
+    const headerCells = rows[0]?.cells.map((cell) => squash(cell.text)) || [];
+    const headers =
+      rows.length > 1 && !firstRowTokens && headerCells.filter(Boolean).length >= 3 && headerCells.every((cell) => cell.length < 40)
+        ? headerCells
+        : null;
+    const templateRows = rows.filter((row) => hasIndex(row.xml, 0));
+    if (templateRows.length > 1) {
+      const lines = templateRows.map((row) => outlineRow(row.cells, null)).filter((line) => line.fields.length);
+      const fields = lines.flatMap((line) => line.fields);
+      add({ type: "record", title: recordTitle || "Item", arrays: arraysOf(fields), rows: lines });
+      recordTitle = "";
+      return;
+    }
+    if (templateRows.length === 1) {
+      const line = outlineRow(templateRows[0].cells, headers);
+      add({ type: "table", arrays: arraysOf(line.fields), columns: line.fields.map((field) => field.caption), fields: line.fields });
+      return;
+    }
+    for (const row of rows.slice(headers ? 1 : 0)) {
+      if (hasIndex(row.xml, 1) || hasIndex(row.xml, "n")) continue;
+      const line = outlineRow(row.cells, headers);
+      if (line.fields.length) add({ type: "row", ...line });
+    }
+  });
+  const seen = new Set();
+  for (const part of sections) {
+    part.blocks = part.blocks.filter((block) => {
+      const own = block.type === "check" ? [block] : block.type === "record" ? block.rows.flatMap((row) => row.fields) : block.fields || [];
+      if (block.type === "heading" || block.type === "note") return true;
+      const fresh = own.filter((field) => !seen.has(field.path));
+      fresh.forEach((field) => seen.add(field.path));
+      if (!fresh.length) return false;
+      if (block.type === "row") block.fields = block.fields.filter((field) => fresh.includes(field));
+      return true;
+    });
+  }
+  return { sections: sections.filter((part) => part.blocks.some((block) => block.type !== "heading" && block.type !== "note")) };
 }
 
 /** A .docx file: a zip holding word/document.xml. */

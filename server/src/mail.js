@@ -70,6 +70,7 @@ export function sendTemplatedEmail({
   envelopeId = null,
   partyId = null,
   actor = "system",
+  attachments = [],
 }) {
   const entity = db.prepare("SELECT * FROM entities WHERE id = ?").get(entityId);
   if (!entity) throw new Error("Entity not found");
@@ -105,8 +106,8 @@ export function sendTemplatedEmail({
   db.prepare(
     `INSERT INTO outbound_emails (
       id, envelope_id, party_id, template_type, to_address,
-      subject, body_html, body_text, content_hash, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      subject, body_html, body_text, content_hash, created_at, attachments_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     id,
     envelopeId,
@@ -117,7 +118,10 @@ export function sendTemplatedEmail({
     bodyHtml,
     bodyText,
     contentHash,
-    now()
+    now(),
+    attachments.length
+      ? JSON.stringify(attachments.map((file) => ({ filename: file.filename, size: file.content.length })))
+      : null
   );
 
   // Local outbox always. Delivery uses the compliance company mailbox, not the broker.
@@ -129,6 +133,7 @@ export function sendTemplatedEmail({
       subject,
       text: bodyText,
       html: bodyHtml,
+      attachments,
       allowOutlook: false,
     })
       .then((delivery) => {

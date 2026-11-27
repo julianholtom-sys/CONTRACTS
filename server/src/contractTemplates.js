@@ -5,6 +5,7 @@ import { isWordFile } from "./docxTemplate.js";
 import { ensureSigningEvidence } from "./seed.js";
 import { writeBytes } from "./storage.js";
 import { previewWordTemplate, wordContractNeeds } from "./wordContract.js";
+import { PACK_TYPES, packTemplateFor, packTemplateView } from "./wordPack.js";
 
 /** The contracts a broker offers. Both 3-way types have the Contractor, Broker and Client; the 4-way adds the Supplier. */
 export const CONTRACT_TYPES = [
@@ -125,6 +126,8 @@ export function brokerContracts(entityId) {
     masters: Object.fromEntries(CONTRACT_TYPES.map((type) => [type.key, masterView(brokerMaster(entityId, type.key))])),
     placeholder: masterView(getMasterTemplate()),
     schedules: brokerSchedules(entityId).map(scheduleView),
+    pack_types: PACK_TYPES,
+    packs: Object.fromEntries(PACK_TYPES.map((type) => [type, packTemplateView(packTemplateFor(entityId, type))])),
   };
 }
 
@@ -142,7 +145,7 @@ export async function saveBrokerMaster(entityId, typeKey, file, { name, descript
   let docxRef = null;
   let wordFields = null;
   if (word) {
-    const preview = await previewWordTemplate(file.buffer);
+    const preview = await previewWordTemplate(file.buffer, entity);
     const missing = ["company", "agency", "supplier"].filter(
       (role) => !preview.fields.some((field) => field.role_key === role && field.field_type === "signature")
     );

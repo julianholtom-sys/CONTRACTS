@@ -8,7 +8,7 @@ import { envelopePlacedFields, fieldsForParty } from "./documentFields.js";
 import { FINAL_EVIDENCE, PARTY_LABELS, SIGNS_BY_LINK } from "./parties.js";
 import { assertClientMayBeInvited, assertContractMayBeIssued } from "./dueDiligence.js";
 import { localDay } from "./ddChecks.js";
-import { stampContractDates, ukDate } from "./coverStamp.js";
+import { contractReference, stampContractDates, ukDate } from "./coverStamp.js";
 import { SIGNATURE_MAX_HEIGHT } from "./signatureInput.js";
 import { appendBoundAttachments, listSigningAttachments } from "./boundDocuments.js";
 import {
@@ -24,6 +24,8 @@ const CONSENT_TEXT =
   "I agree to sign this document electronically. I understand that my electronic signature is as legally binding as a handwritten signature.";
 const SAVED_SIGNATURE_TEXT =
   "Signature saved on the company record and applied when the contract was issued.";
+// Mail providers refuse much over 25 MB once the files are encoded, so larger copies stay in the app.
+const MAIL_ATTACHMENT_LIMIT = 18 * 1024 * 1024;
 
 export function hashToken(raw) {
   return createHash("sha256").update(raw).digest("hex");
@@ -638,17 +640,34 @@ export async function finalizeEnvelope(envelopeId) {
     metadata: { local_only: true, parties: signatures.length },
   });
 
-  // completion emails (local log)
+  // Each party gets the completed PDF; on a contract with the broker's own pack, the client also gets the pack beside it.
   const parties = db
-    .prepare("SELECT * FROM envelope_parties WHERE envelope_id = ?")
+    .prepare(
+      `SELECT p.*, r.role_key FROM envelope_parties p
+       JOIN template_roles r ON r.id = p.role_id
+       WHERE p.envelope_id = ?`
+    )
     .all(envelopeId);
+  const packRow = db.prepare("SELECT pack_template_id, dd_validated_at, dd_storage_ref FROM envelopes WHERE id = ?").get(envelopeId);
+  const fileSafe = (name) => name.replace(/[\\/:*?"<>|]+/g, " ").replace(/\s+/g, " ").trim();
+  const contractFile = {
+    filename: fileSafe(`${contractReference(envelope, "CT")} ${envelope.title || "Contract"}.pdf`),
+    content: completedBytes,
+  };
+  const packFile =
+    packRow?.pack_template_id && packRow.dd_validated_at && packRow.dd_storage_ref
+      ? { filename: fileSafe(`${contractReference(envelope, "DD")} Due diligence pack.pdf`), content: readBytes(packRow.dd_storage_ref) }
+      : null;
   for (const party of parties) {
+    const files = [contractFile, ...(packFile && party.role_key === "company" ? [packFile] : [])];
+    const size = files.reduce((total, file) => total + file.content.length, 0);
     sendTemplatedEmail({
       entityId: entity.id,
       templateType: "completion",
       to: party.signer_email,
       envelopeId,
       partyId: party.id,
+      attachments: size <= MAIL_ATTACHMENT_LIMIT ? files : [],
       vars: {
         signer_name: party.signer_name,
         signer_company: party.company_name,

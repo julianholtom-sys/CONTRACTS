@@ -31,6 +31,16 @@ import { isPublicApi, login, logout, userFromRequest } from "./auth.js";
 import { lookupCompany } from "./companiesHouse.js";
 import { localDay } from "./ddChecks.js";
 import { missingEngagement, storedFee, storedPaymentModels, wordContractNeeds } from "./wordContract.js";
+import {
+  deletePackTemplate,
+  packTemplateFor,
+  paymentModelsChanged,
+  readWordPackFile,
+  removeWordPackFile,
+  savePackTemplate,
+  saveWordPack,
+  saveWordPackFile,
+} from "./wordPack.js";
 import { readSignatureInput } from "./signatureInput.js";
 import {
   contractFromLibrary,
@@ -56,6 +66,7 @@ import {
   addNameChange,
   assertContractMayBeIssued,
   assertDdEditable,
+  assertPackOpen,
   compileDueDiligence,
   confirmWorkerArrangement,
   diligenceSession,
@@ -202,7 +213,7 @@ function brokerDiligenceUrl(envelopeId, baseUrl) {
     .get(envelopeId);
   if (!broker) throw new Error("This contract has no broker");
   const envelope = db.prepare("SELECT * FROM envelopes WHERE id = ?").get(envelopeId);
-  assertDdEditable(envelope);
+  assertPackOpen(envelope);
   const token = issuePartyToken(broker.id);
   return { url: `${baseUrl}/diligence/${token.raw}`, path: `/diligence/${token.raw}` };
 }
@@ -1077,6 +1088,57 @@ app.delete("/api/brokers/:entityId/contracts/:type", (req, res) => {
   }
 });
 
+app.post("/api/brokers/:entityId/packs/:type/file", upload.single("file"), async (req, res) => {
+  try {
+    res.json(await savePackTemplate(req.params.entityId, req.params.type, req.file));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.get("/api/brokers/:entityId/packs/:type/file", (req, res) => {
+  const pack = packTemplateFor(req.params.entityId, req.params.type);
+  if (!pack?.preview_ref) return res.status(404).json({ error: "No due diligence pack uploaded" });
+  sendStoredPdf(res, pack.preview_ref, String(pack.file_name || "Due diligence pack.docx").replace(/\.docx$/i, ".pdf"));
+});
+
+app.delete("/api/brokers/:entityId/packs/:type", (req, res) => {
+  deletePackTemplate(req.params.entityId, req.params.type);
+  res.status(204).end();
+});
+
+app.put("/api/envelopes/:id/pack", (req, res) => {
+  try {
+    res.json(saveWordPack(req.params.id, req.body || {}));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post("/api/envelopes/:id/pack/files", upload.single("file"), (req, res) => {
+  try {
+    res.status(201).json(saveWordPackFile(req.params.id, req.body?.key, req.file));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.delete("/api/envelopes/:id/pack/files/:fileId", (req, res) => {
+  try {
+    res.json(removeWordPackFile(req.params.id, req.params.fileId));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.get("/api/envelopes/:id/pack/files/:fileId", (req, res) => {
+  const file = readWordPackFile(req.params.id, req.params.fileId);
+  if (!file) return res.status(404).json({ error: "File not found" });
+  res.setHeader("Content-Type", file.mime || "application/octet-stream");
+  res.setHeader("Content-Disposition", `inline; filename="${String(file.original_name || "file").replace(/"/g, "")}"`);
+  res.send(readBytes(file.storage_ref));
+});
+
 app.post("/api/brokers/:entityId/schedules", upload.single("file"), async (req, res) => {
   try {
     res.status(201).json(
@@ -1358,11 +1420,13 @@ app.patch("/api/envelopes/:id/engagement", async (req, res) => {
     if (!envelope) return res.status(404).json({ error: "Not found" });
     if (!["draft", "ready"].includes(envelope.status)) throw new Error("These terms are fixed once the contract is sent");
     const body = req.body || {};
+    const paymentModels = body.paymentModels === undefined ? envelope.payment_models : storedPaymentModels(body.paymentModels);
     db.prepare("UPDATE envelopes SET contractor_fee = ?, payment_models = ? WHERE id = ?").run(
       body.contractorFee === undefined ? envelope.contractor_fee : storedFee(body.contractorFee),
-      body.paymentModels === undefined ? envelope.payment_models : storedPaymentModels(body.paymentModels),
+      paymentModels,
       envelope.id
     );
+    if (paymentModels !== envelope.payment_models) paymentModelsChanged(envelope.id);
     if (envelope.status === "ready") await bakeEnvelope(envelope.id, { actor: "staff" });
     res.json(getEnvelopeBundle(envelope.id));
   } catch (err) {
