@@ -222,6 +222,11 @@ Rules of the road:
     - The **contractor record** has an “On a 4-way” panel with the Employers’ Liability certificate naming the Supplier and the policy pages adding the Supplier. The panel shows once the contractor is on a 4-way contract (or a file is already there). The pack requires both only on a 4-way.
     - In the **pack**, those two are annexed in the contractor’s group. The supplier’s checks table keeps one Employers’ Liability row (v7 brief 2.2), which reads the contractor’s policy: “added to {contractor}’s policy, {insurer}, policy {number}, cover £… (shared limit), expires …”. It is flagged on the same rules, and its Annex column points to the two documents. The annex count stays 18.
     - The test supplier’s old EL files and insurance details stay in the database but are no longer asked for or used. Full test: 189 of 189 checks passed.
+48. **Hosting: local only for now (user decision 2026-11-27).** “Deploy to live” could not run from this PC: the old phone demo ran in tmux on a separate Linux host behind a localhost.run tunnel, and this PC has no tunnel, tmux or `TUNNEL_URL.txt`. The app runs locally on this PC. While it is local, clients can’t open emailed sign links, so real signing waits for hosting.
+    - **What the app needs from a host:** an always-on Node 22.5+ server (`node:sqlite`) with about 1 GB of memory; a lasting disk of about 10 GB to start (each contract stores the prepared copy, the signed copy and the pack, roughly 2.5 times the signed size: 100 contracts at 20 MB is about 5 GB); 20 MB uploads and larger downloads; outbound email on port 587; HTTPS on a proper subdomain; UK or EU data location, encryption and separate backups (the files include passport scans, bank statements and payslips).
+    - **Vercel** (where the PDF stripper lives) doesn’t fit: its disk doesn’t keep files and it caps request and response bodies at 4.5 MB.
+    - **Hostinger** is the user’s preferred host (account u195671909, Node.js web apps deployed from GitHub `main`). Check first: Node 22 or 24 is offered and runs (Certus is on Node 20 and hit a GLIBC error with Next 16); a data folder outside the deploy folder survives a redeploy; 20 MB uploads get through; outbound port 587 is open; which backups the plan includes. If Node 22 or lasting files fail, a Hostinger VPS is the fallback. The user signs in to hPanel; don’t look for Hostinger credentials.
+    - **App changes before any host:** the signed-contract and due diligence downloads (`GET /api/envelopes/:id/documents/:kind` and `/due-diligence`) are public to anyone with the contract ID and must need a staff login or a valid sign link; `Secure` on the session cookie, `trust proxy` and security headers; a lockout after repeated wrong passwords; a `DATA_DIR` setting (the data folder is fixed at `server/data`); the mailbox password from `SMTP_*` environment settings rather than the database; `engines` set to Node 22.5+; a clean copy of the records for upload (real brokers only, no test contracts, no stored password).
 
 ## Active git / PR notes
 
@@ -249,7 +254,7 @@ Rules of the road:
 - [ ] Optional: stable public host (named tunnel / forever-free SSH key) so URL never changes even on SSH death.
 - [x] Default New contract sending company to **Union Payroll**.
 - [x] Due diligence pack is compiled in the app. Parties are not emailed to complete it. The broker signs it from the contract.
-- [ ] Say “deploy to live” when phone demo should pick up new code (don’t assume every commit is live).
+- [ ] Say “deploy to live” when phone demo should pick up new code (don’t assume every commit is live). Parked: local only for now (item 48).
 - [x] Make `npm start` work on Windows (item 40).
 - [x] 3-way contract tested end to end, from creation to the client’s signature (item 40).
 - [x] Full test of 3-way and 4-way for both brokers with a fake client: 152 of 152 checks passed (item 42).

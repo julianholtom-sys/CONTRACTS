@@ -31,6 +31,8 @@ Use the latest **Claude Opus** for product work on this app, with thinking on. U
 
 ## Phone demo tunnel
 
+**Local only for now (user decision, 27 Nov 2026).** The app runs on the user’s Windows PC (`npm start`, http://localhost:8787). The localhost.run demo below ran on a separate Linux host that this PC cannot reach; don’t try to deploy it. When hosting is picked up again, the user prefers Hostinger: see `docs/PROJECT_STATUS.md` item 48 for what to check there and what the app needs first. Vercel doesn’t fit (no lasting disk, 4.5 MB file cap).
+
 - Cloudflare `*.trycloudflare.com` quick tunnels proved unreliable (HTTP 530 while process still “up”).
 - Use `scripts/keep-tunnel-alive.sh` → **localhost.run** `*.lhr.life`.
 - Live URL is written to `TUNNEL_URL.txt` (gitignored). Do not commit ephemeral URLs.
